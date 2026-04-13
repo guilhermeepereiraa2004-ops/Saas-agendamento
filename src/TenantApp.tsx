@@ -57,15 +57,15 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
     fetchData();
 
-    // REAL-TIME: Apply changes directly from event payload (no extra network round trip)
+    // REAL-TIME: Apply changes directly from event payload
     const channel = supabase
       .channel(`queue_realtime_${tenant.id}`)
       .on('postgres_changes', { 
         event: 'INSERT', 
         schema: 'public', 
         table: 'queue_items',
+        filter: `tenant_id=eq.${tenant.id}` 
       }, (payload) => {
-        if (payload.new.tenant_id !== tenant.id) return;
         setQueue(prev => {
           const alreadyExists = prev.some(i => i.id === payload.new.id);
           if (alreadyExists) return prev;
@@ -76,16 +76,26 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         event: 'UPDATE',
         schema: 'public',
         table: 'queue_items',
+        filter: `tenant_id=eq.${tenant.id}`
       }, (payload) => {
-        if (payload.new.tenant_id !== tenant.id) return;
-        setQueue(prev => prev.map(item => 
-          item.id === payload.new.id ? mapQueueItem(payload.new) : item
-        ));
+        setQueue(prev => prev.map(item => {
+          if (item.id === payload.new.id) {
+            // MERGE logic: Use the new fields, but keep old ones if new ones are missing
+            // (Important if REPLICA IDENTITY is not FULL)
+            return {
+              ...item,
+              ...mapQueueItem({ ...item, ...payload.new }) 
+            };
+          }
+          return item;
+        }));
       })
       .on('postgres_changes', {
         event: 'DELETE',
         schema: 'public',
         table: 'queue_items',
+        // Note: DELETE events don't support filters on non-primary-key columns easily 
+        // without some extra config, so we filter it in the callback or just keep it simple
       }, (payload) => {
         setQueue(prev => prev.filter(item => item.id !== payload.old.id));
       })
@@ -93,8 +103,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         event: 'UPDATE',
         schema: 'public',
         table: 'tenants',
+        filter: `id=eq.${tenant.id}`
       }, (payload) => {
-        if (payload.new.id !== tenant.id) return;
         if (payload.new.completed_today !== undefined) {
           setCompletedCount(payload.new.completed_today);
         }
@@ -102,7 +112,14 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
           setTenant(prev => ({ ...prev, isOnline: payload.new.is_online }));
         }
       })
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('Realtime connected for tenant:', tenant.id);
+        }
+        if (status === 'CHANNEL_ERROR') {
+          console.error('Realtime connection error for tenant:', tenant.id);
+        }
+      });
 
     return () => {
       supabase.removeChannel(channel);
