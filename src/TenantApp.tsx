@@ -11,7 +11,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const { showToast } = useToasts();
   const [queue, setQueue] = useState<QueueItem[]>([]);
   
-  // INITIAL LOAD + REALTIME: Configura carregamento inicial e subscrições em tempo real
+  // INITIAL LOAD + REALTIME
   useEffect(() => {
     const mapQueueItem = (q: any): QueueItem => ({
       id: q.id,
@@ -24,7 +24,6 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       joinedAt: q.joined_at
     });
 
-    // Função de busca inicial de dados (usada também como fallback após reconexão)
     const fetchData = async () => {
       const { data: queueData } = await supabase
         .from('queue_items')
@@ -56,92 +55,68 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
     fetchData();
 
-    // REALTIME: Canal único para todos os eventos deste tenant
-    // Usar um nome de canal único e estável evita conflitos de subscrição duplicada
-    const channelName = `tenant_realtime_v2_${tenant.id}`;
-
-    const channel = supabase
-      .channel(channelName, {
-        config: {
-          broadcast: { ack: false },
-          presence: { key: '' },
-        },
-      })
-      // --- FILA: Novo agendamento ---
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'queue_items',
-        filter: `tenant_id=eq.${tenant.id}`,
-      }, (payload) => {
-        console.log('[Realtime] INSERT queue_items:', payload.new);
-        setQueue(prev => {
-          if (prev.some(i => i.id === payload.new.id)) return prev;
-          return [...prev, mapQueueItem(payload.new)];
-        });
-      })
-      // --- FILA: Mudança de status (ex: waiting -> serving) ---
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'queue_items',
-        filter: `tenant_id=eq.${tenant.id}`,
-      }, (payload) => {
-        console.log('[Realtime] UPDATE queue_items:', payload.new);
-        setQueue(prev => prev.map(item => {
-          if (item.id === payload.new.id) {
-            return { ...item, ...mapQueueItem({ ...item, ...payload.new }) };
-          }
-          return item;
-        }));
-      })
-      // --- FILA: Remoção de cliente ---
-      .on('postgres_changes', {
-        event: 'DELETE',
-        schema: 'public',
-        table: 'queue_items',
-      }, (payload) => {
-        console.log('[Realtime] DELETE queue_items:', payload.old);
-        setQueue(prev => prev.filter(item => item.id !== payload.old.id));
-      })
-      // --- TENANT: Online/Offline e contador de atendimentos ---
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'tenants',
-        filter: `id=eq.${tenant.id}`,
-      }, (payload) => {
-        console.log('[Realtime] UPDATE tenants:', payload.new);
-        if (payload.new.completed_today !== undefined) {
-          setCompletedCount(payload.new.completed_today);
+    // Canal separado para queue_items
+    const queueChannel = supabase
+      .channel(`queue_${tenant.id}`)
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'queue_items', filter: `tenant_id=eq.${tenant.id}` },
+        (payload) => {
+          console.log('[RT] INSERT', payload.new);
+          setQueue(prev => prev.some(i => i.id === payload.new.id) ? prev : [...prev, mapQueueItem(payload.new)]);
         }
-        setTenant(prev => ({
-          ...prev,
-          isOnline: payload.new.is_online ?? prev.isOnline,
-          name: payload.new.name ?? prev.name,
-          primaryColor: payload.new.primary_color ?? prev.primaryColor,
-        }));
-      })
-      .subscribe(async (status, err) => {
-        console.log(`[Realtime] Status do canal "${channelName}":`, status, err ?? '');
-
-        if (status === 'SUBSCRIBED') {
-          console.log('[Realtime] ✅ Conectado com sucesso para tenant:', tenant.id);
+      )
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'queue_items', filter: `tenant_id=eq.${tenant.id}` },
+        (payload) => {
+          console.log('[RT] UPDATE queue', payload.new);
+          setQueue(prev => prev.map(item =>
+            item.id === payload.new.id ? { ...item, ...mapQueueItem({ ...item, ...payload.new }) } : item
+          ));
         }
-
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          console.warn('[Realtime] ⚠️ Conexão perdida. Rebuscando dados do servidor...');
-          // Ao reconectar ou em caso de erro, buscar dados atualizados do servidor
-          // para garantir que o estado local está sincronizado
-          await fetchData();
+      )
+      .on('postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'queue_items' },
+        (payload) => {
+          console.log('[RT] DELETE', payload.old);
+          setQueue(prev => prev.filter(item => item.id !== payload.old.id));
         }
+      )
+      .subscribe((status) => {
+        console.log('[RT] queueChannel:', status);
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') fetchData();
       });
 
+    // Canal separado para tenants (online/offline)
+    const tenantChannel = supabase
+      .channel(`tenant_${tenant.id}`)
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'tenants', filter: `id=eq.${tenant.id}` },
+        (payload) => {
+          console.log('[RT] UPDATE tenant', payload.new);
+          if (payload.new.completed_today !== undefined) setCompletedCount(payload.new.completed_today);
+          setTenant(prev => ({
+            ...prev,
+            isOnline: payload.new.is_online ?? prev.isOnline,
+            name: payload.new.name ?? prev.name,
+            primaryColor: payload.new.primary_color ?? prev.primaryColor,
+          }));
+        }
+      )
+      .subscribe((status) => {
+        console.log('[RT] tenantChannel:', status);
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') fetchData();
+      });
+
+    // Polling de segurança a cada 5s (garante sincronia mesmo se WebSocket falhar)
+    const pollInterval = setInterval(fetchData, 5000);
+
     return () => {
-      console.log('[Realtime] Removendo canal:', channelName);
-      supabase.removeChannel(channel);
+      supabase.removeChannel(queueChannel);
+      supabase.removeChannel(tenantChannel);
+      clearInterval(pollInterval);
     };
   }, [tenant.id]);
+
 
   // Handle service extraction since we now deal with objects
   const [name, setName] = useState('');
