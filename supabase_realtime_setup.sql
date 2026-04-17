@@ -1,20 +1,31 @@
--- Enable Realtime for the tables
-BEGIN;
-  DO $$
-  BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
-      CREATE PUBLICATION supabase_realtime;
-    END IF;
-  END $$;
+-- =============================================================
+-- SUPABASE REALTIME SETUP - Execute no SQL Editor do Supabase
+-- =============================================================
 
-  ALTER PUBLICATION supabase_realtime ADD TABLE queue_items;
-  ALTER PUBLICATION supabase_realtime ADD TABLE tenants;
-EXCEPTION
-  WHEN duplicate_object THEN
-    NULL;
-END;
-COMMIT;
+-- 1. Verificar se as tabelas já estão na publicação
+SELECT schemaname, tablename 
+FROM pg_publication_tables 
+WHERE pubname = 'supabase_realtime';
 
--- Set Replica Identity to FULL (Required for UPDATE events to carry all data)
+-- 2. Adicionar tabelas à publicação (se ainda não estiverem)
+ALTER PUBLICATION supabase_realtime ADD TABLE queue_items;
+ALTER PUBLICATION supabase_realtime ADD TABLE tenants;
+
+-- 3. MUITO IMPORTANTE: Definir REPLICA IDENTITY FULL para que eventos
+--    UPDATE e DELETE tragam os dados antigos E novos corretamente
 ALTER TABLE queue_items REPLICA IDENTITY FULL;
 ALTER TABLE tenants REPLICA IDENTITY FULL;
+
+-- 4. Verificar o resultado
+SELECT 
+    c.relname AS table_name,
+    CASE c.relreplident
+        WHEN 'd' THEN 'DEFAULT (somente PK)'
+        WHEN 'f' THEN 'FULL (todos os campos) ✅'
+        WHEN 'i' THEN 'INDEX'
+        WHEN 'n' THEN 'NOTHING'
+    END AS replica_identity
+FROM pg_class c
+JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'public'
+  AND c.relname IN ('queue_items', 'tenants');
