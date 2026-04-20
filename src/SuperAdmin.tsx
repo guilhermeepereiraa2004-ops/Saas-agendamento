@@ -22,8 +22,17 @@ export default function SuperAdmin() {
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [profession, setProfession] = useState<Profession>('barber');
+  const [bookingType, setBookingType] = useState<'queue' | 'appointment'>('queue');
+  const [workingHours, setWorkingHours] = useState<{day: number, start: string, end: string}[]>([
+    { day: 1, start: '09:00', end: '18:00' },
+    { day: 2, start: '09:00', end: '18:00' },
+    { day: 3, start: '09:00', end: '18:00' },
+    { day: 4, start: '09:00', end: '18:00' },
+    { day: 5, start: '09:00', end: '18:00' },
+    { day: 6, start: '09:00', end: '14:00' },
+  ]);
   const [services, setServices] = useState<Service[]>([
-    { id: '1', name: 'Corte Clássico', price: 40 }
+    { id: '1', name: 'Corte Clássico', price: 40, duration: 30 }
   ]);
 
   useEffect(() => {
@@ -46,6 +55,8 @@ export default function SuperAdmin() {
         loginEmail: t.login_email,
         loginPassword: t.login_password,
         profession: t.profession || 'barber',
+        bookingType: t.booking_type || 'queue',
+        workingHours: typeof t.working_hours === 'string' ? JSON.parse(t.working_hours) : (t.working_hours || []),
         services: typeof t.services === 'string' ? JSON.parse(t.services) : t.services
       }));
       setTenants(mapped);
@@ -64,6 +75,8 @@ export default function SuperAdmin() {
       login_email: tenantData.loginEmail,
       login_password: tenantData.loginPassword,
       profession: tenantData.profession,
+      booking_type: tenantData.bookingType,
+      working_hours: tenantData.workingHours,
       services: tenantData.services,
     };
 
@@ -88,7 +101,7 @@ export default function SuperAdmin() {
   };
 
   const handleAddService = () => {
-    setServices([...services, { id: Math.random().toString(), name: '', price: 0 }]);
+    setServices([...services, { id: Math.random().toString(), name: '', price: 0, duration: 30 }]);
   };
 
   const updateService = (id: string, field: keyof Service, value: string | number) => {
@@ -136,6 +149,8 @@ export default function SuperAdmin() {
       loginEmail,
       loginPassword,
       profession,
+      bookingType,
+      workingHours,
       services: services.filter(s => s.name.trim() !== '') // Remove empty services
     };
 
@@ -197,7 +212,16 @@ export default function SuperAdmin() {
     setLoginEmail('');
     setLoginPassword('');
     setProfession('barber');
-    setServices([{ id: Math.random().toString(), name: 'Corte Clássico', price: 40 }]);
+    setBookingType('queue');
+    setWorkingHours([
+      { day: 1, start: '09:00', end: '18:00' },
+      { day: 2, start: '09:00', end: '18:00' },
+      { day: 3, start: '09:00', end: '18:00' },
+      { day: 4, start: '09:00', end: '18:00' },
+      { day: 5, start: '09:00', end: '18:00' },
+      { day: 6, start: '09:00', end: '14:00' },
+    ]);
+    setServices([{ id: Math.random().toString(), name: 'Corte Clássico', price: 40, duration: 30 }]);
   };
 
   const handleEdit = (tenant: Tenant) => {
@@ -211,7 +235,20 @@ export default function SuperAdmin() {
     setLoginEmail(tenant.loginEmail || '');
     setLoginPassword(tenant.loginPassword || '');
     setProfession(tenant.profession || 'barber');
-    setServices(tenant.services.length > 0 ? [...tenant.services] : [{ id: Math.random().toString(), name: '', price: 0 }]);
+    setBookingType(tenant.bookingType || 'queue');
+    if (tenant.workingHours && tenant.workingHours.length > 0) {
+      setWorkingHours(tenant.workingHours);
+    } else {
+      setWorkingHours([
+        { day: 1, start: '09:00', end: '18:00' },
+        { day: 2, start: '09:00', end: '18:00' },
+        { day: 3, start: '09:00', end: '18:00' },
+        { day: 4, start: '09:00', end: '18:00' },
+        { day: 5, start: '09:00', end: '18:00' },
+        { day: 6, start: '09:00', end: '14:00' },
+      ]);
+    }
+    setServices(tenant.services.length > 0 ? [...tenant.services] : [{ id: Math.random().toString(), name: '', price: 0, duration: 30 }]);
     setShowForm(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -390,6 +427,80 @@ export default function SuperAdmin() {
             </div>
           </div>
 
+          <div style={{ marginTop: '2rem', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '2rem' }}>
+            <h3 style={{ color: '#fff', marginBottom: '1rem' }}>Modelo de Atendimento</h3>
+            <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem' }}>
+              <button 
+                type="button" 
+                className={`btn-role ${bookingType === 'queue' ? 'serving' : ''}`} 
+                onClick={() => setBookingType('queue')}
+                style={{ flex: 1, borderColor: bookingType === 'queue' ? 'var(--success)' : '' }}
+              >Ordem de Chegada (Fila)</button>
+              <button 
+                type="button" 
+                className={`btn-role ${bookingType === 'appointment' ? 'serving' : ''}`} 
+                onClick={() => setBookingType('appointment')}
+                style={{ flex: 1, borderColor: bookingType === 'appointment' ? 'var(--success)' : '' }}
+              >Horário Marcado</button>
+            </div>
+
+            {bookingType === 'appointment' && (
+              <div style={{ background: 'rgba(255,255,255,0.03)', padding: '1.5rem', borderRadius: 'var(--border-radius-md)', border: '1px solid rgba(255,255,255,0.07)' }}>
+                <h4 style={{ color: '#fff', marginBottom: '1rem', fontSize: '1rem' }}>Horários de Funcionamento</h4>
+                <div style={{ display: 'grid', gap: '0.75rem' }}>
+                  {['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'].map((dayName, idx) => {
+                    const dayNum = idx === 6 ? 0 : idx + 1; // 0 = Domingo, 1-6 = Seg-Sab
+                    const wh = workingHours.find(h => h.day === dayNum);
+                    const isWorking = !!wh;
+                    
+                    return (
+                      <div key={dayNum} style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                        <label style={{ width: '100px', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                          <input 
+                            type="checkbox" 
+                            checked={isWorking} 
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setWorkingHours([...workingHours, { day: dayNum, start: '09:00', end: '18:00' }].sort((a,b) => a.day - b.day));
+                              } else {
+                                setWorkingHours(workingHours.filter(h => h.day !== dayNum));
+                              }
+                            }} 
+                            style={{ width: '16px', height: '16px', margin: 0 }}
+                          />
+                          {dayName}
+                        </label>
+                        {isWorking && wh ? (
+                          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flex: 1 }}>
+                            <input 
+                              type="time" 
+                              value={wh.start} 
+                              onChange={e => {
+                                setWorkingHours(workingHours.map(h => h.day === dayNum ? { ...h, start: e.target.value } : h));
+                              }} 
+                              style={{ padding: '0.5rem' }} 
+                            />
+                            <span style={{ color: 'var(--text-secondary)' }}>até</span>
+                            <input 
+                              type="time" 
+                              value={wh.end} 
+                              onChange={e => {
+                                setWorkingHours(workingHours.map(h => h.day === dayNum ? { ...h, end: e.target.value } : h));
+                              }} 
+                              style={{ padding: '0.5rem' }} 
+                            />
+                          </div>
+                        ) : (
+                          <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', fontStyle: 'italic' }}>Fechado</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
           <div style={{ marginTop: '2rem', marginBottom: '1rem', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '2rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
               <h3 style={{ color: '#fff' }}>Serviços Oferecidos</h3>
@@ -420,6 +531,21 @@ export default function SuperAdmin() {
                     step="0.01"
                   />
                 </div>
+                {bookingType === 'appointment' && (
+                  <div style={{ flex: 1, position: 'relative' }}>
+                    <span style={{ position: 'absolute', left: '16px', top: '14px', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>Min</span>
+                    <input 
+                      type="number" 
+                      value={service.duration || ''} 
+                      onChange={e => updateService(service.id, 'duration', parseInt(e.target.value))} 
+                      placeholder="30"
+                      style={{ paddingLeft: '48px' }}
+                      required={bookingType === 'appointment'}
+                      min="5"
+                      step="5"
+                    />
+                  </div>
+                )}
                 {services.length > 1 && (
                   <button type="button" onClick={() => removeService(service.id)} style={{ padding: '0 1rem', background: 'rgba(239,68,68,0.1)', color: 'var(--danger)', borderRadius: 'var(--border-radius-md)', border: '1px solid rgba(239,68,68,0.3)', cursor: 'pointer' }}>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>

@@ -5,6 +5,7 @@ import { supabase } from './lib/supabase';
 import FinancialView from './FinancialView';
 import { getProfessionConfig } from './lib/professionConfig';
 import { useToasts } from './components/ToastProvider';
+import { loginOneSignal, requestNotificationPermission } from './components/OneSignalInitializer';
 
 export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant }) {
   const [tenant, setTenant] = useState<Tenant>(initialTenant);
@@ -21,7 +22,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       serviceName: q.service_name,
       price: parseFloat(q.price),
       status: q.status,
-      joinedAt: q.joined_at
+      joinedAt: q.joined_at,
+      appointmentTime: q.appointment_time
     });
 
     const fetchData = async () => {
@@ -124,6 +126,15 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const [selectedServiceId, setSelectedServiceId] = useState('');
   const [completedCount, setCompletedCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  
+  // Appointment specific state
+  const [selectedDate, setSelectedDate] = useState(() => {
+    const d = new Date();
+    // Ajustar fuso horário local para o input de data
+    const offset = d.getTimezoneOffset() * 60000;
+    return new Date(d.getTime() - offset).toISOString().split('T')[0];
+  });
+  const [selectedTimeSlot, setSelectedTimeSlot] = useState('');
 
   // Set initial service when tenant services load
   useEffect(() => {
@@ -131,6 +142,51 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       setSelectedServiceId(tenant.services[0].id);
     }
   }, [tenant.services]);
+
+  const getBookedSlots = () => {
+    return queue
+      .filter(q => q.appointmentTime && q.appointmentTime.startsWith(selectedDate))
+      .map(q => {
+        const timePart = q.appointmentTime!.split('T')[1];
+        return timePart ? timePart.substring(0, 5) : null;
+      })
+      .filter(Boolean) as string[];
+  };
+
+  const getAvailableSlots = () => {
+    if (!tenant.workingHours || tenant.workingHours.length === 0) return [];
+    
+    // JS getDay(): 0=Sun, 1=Mon... Our db workingHours: 0=Dom, 1=Seg...
+    const dateObj = new Date(selectedDate + "T12:00:00"); // 12:00 to avoid timezone shift
+    const dayOfWeek = dateObj.getDay(); 
+    
+    const wh = tenant.workingHours.find(h => h.day === dayOfWeek);
+    if (!wh) return [];
+
+    const service = tenant.services.find(s => s.id === selectedServiceId);
+    if (!service || !service.duration) return [];
+
+    const startParts = wh.start.split(':').map(Number);
+    const endParts = wh.end.split(':').map(Number);
+    let currentMins = startParts[0] * 60 + startParts[1];
+    const endMins = endParts[0] * 60 + endParts[1];
+
+    const bookedSlots = getBookedSlots();
+    const slots = [];
+    
+    while (currentMins + service.duration <= endMins) {
+      const h = Math.floor(currentMins / 60).toString().padStart(2, '0');
+      const m = (currentMins % 60).toString().padStart(2, '0');
+      const timeString = `${h}:${m}`;
+      
+      // Calculate slot end time to check overlap if needed, but for simplicity we assume exact slots
+      if (!bookedSlots.includes(timeString)) {
+        slots.push(timeString);
+      }
+      currentMins += service.duration;
+    }
+    return slots;
+  };
 
   // Auth state specifics to this tenant
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -153,6 +209,10 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const handleJoinQueue = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !selectedServiceId) return;
+    if (tenant.bookingType === 'appointment' && !selectedTimeSlot) {
+      showToast('Por favor, selecione um horário!', 'warning');
+      return;
+    }
     setShowConfirmation(true);
   };
 
@@ -190,7 +250,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         service_id: selectedSvc.id,
         service_name: selectedSvc.name,
         price: selectedSvc.price,
-        status: 'waiting'
+        status: tenant.bookingType === 'appointment' ? 'ready' : 'waiting', // Appointments skip waiting to be 'served' by time
+        appointment_time: tenant.bookingType === 'appointment' ? `${selectedDate}T${selectedTimeSlot}:00` : null
       }]);
 
       if (!error) {
@@ -251,6 +312,10 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       setIsAuthenticated(true);
       setShowLogin(false);
       showToast('Login realizado com sucesso!', 'success');
+      
+      // Logar no OneSignal para receber notificações de admin
+      loginOneSignal(`admin_${tenant.id}`);
+      requestNotificationPermission();
     } else {
       showToast('E-mail ou senha incorretos!', 'error');
     }
@@ -414,6 +479,14 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                   {tenant.services.find(s => s.id === selectedServiceId)?.name}
                 </span>
               </div>
+              {tenant.bookingType === 'appointment' && (
+                <div style={{ marginBottom: '1.25rem' }}>
+                  <span style={{ display: 'block', fontSize: '0.75rem', color: '#a1a1aa', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.4rem' }}>Data e Horário</span>
+                  <span style={{ fontSize: '1.1rem', fontWeight: 600, color: '#fff' }}>
+                    {selectedDate.split('-').reverse().join('/')} às {selectedTimeSlot}
+                  </span>
+                </div>
+              )}
               <div>
                 <span style={{ display: 'block', fontSize: '0.75rem', color: '#a1a1aa', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.4rem' }}>Valor do Atendimento</span>
                 <span style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--accent-primary)' }}>
@@ -567,6 +640,27 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', lineHeight: '1.6' }}>
                 Você já está na fila. Agora é só aguardar o(a) {prof.professional.toLowerCase()} chamar pelo painel ou pelo WhatsApp.
               </p>
+              
+              <div style={{ marginTop: '2rem', padding: '1.5rem', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '12px', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+                <p style={{ color: '#fff', fontSize: '0.9rem', marginBottom: '1rem', fontWeight: 500 }}>
+                  🔔 Quer ser avisado quando chegar sua vez?
+                </p>
+                <button 
+                  onClick={() => requestNotificationPermission()}
+                  style={{ 
+                    background: '#3b82f6', 
+                    color: '#fff', 
+                    border: 'none', 
+                    padding: '10px 20px', 
+                    borderRadius: '8px', 
+                    fontWeight: 600, 
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)'
+                  }}
+                >
+                  Ativar Notificações
+                </button>
+              </div>
               <button 
                 onClick={() => {
                   if(confirm("Deseja entrar novamente com outro nome?")) {
@@ -622,18 +716,73 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                   <select 
                     id="service" 
                     value={selectedServiceId}
-                    onChange={(e) => setSelectedServiceId(e.target.value)}
+                    onChange={(e) => {
+                      setSelectedServiceId(e.target.value);
+                      setSelectedTimeSlot('');
+                    }}
                   >
                     {tenant.services.map(s => (
                       <option key={s.id} value={s.id}>
-                        {s.name} — R$ {s.price.toFixed(2).replace('.', ',')}
+                        {s.name} — R$ {s.price.toFixed(2).replace('.', ',')} {s.duration && tenant.bookingType === 'appointment' ? `(${s.duration} min)` : ''}
                       </option>
                     ))}
                   </select>
                 </div>
+
+                {tenant.bookingType === 'appointment' && (
+                  <div style={{ background: 'rgba(255,255,255,0.02)', padding: '1.5rem', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)', marginBottom: '1.5rem' }}>
+                    <div className="form-group" style={{ marginBottom: '1rem' }}>
+                      <label htmlFor="date">Data do Agendamento</label>
+                      <input 
+                        type="date" 
+                        id="date" 
+                        value={selectedDate}
+                        onChange={(e) => {
+                          setSelectedDate(e.target.value);
+                          setSelectedTimeSlot('');
+                        }}
+                        min={new Date().toISOString().split('T')[0]}
+                        required
+                        style={{ background: 'rgba(0,0,0,0.2)' }}
+                      />
+                    </div>
+                    
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label>Horários Disponíveis</label>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '8px', marginTop: '0.5rem' }}>
+                        {getAvailableSlots().length === 0 ? (
+                          <div style={{ gridColumn: '1 / -1', fontSize: '0.9rem', color: 'var(--text-secondary)', fontStyle: 'italic', padding: '0.5rem 0' }}>
+                            Nenhum horário disponível para esta data.
+                          </div>
+                        ) : (
+                          getAvailableSlots().map(slot => (
+                            <button
+                              key={slot}
+                              type="button"
+                              onClick={() => setSelectedTimeSlot(slot)}
+                              style={{
+                                padding: '8px 4px',
+                                borderRadius: '6px',
+                                fontSize: '0.9rem',
+                                fontWeight: 600,
+                                border: selectedTimeSlot === slot ? '1px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.1)',
+                                background: selectedTimeSlot === slot ? 'rgba(var(--accent-primary-rgb, 234, 179, 8), 0.15)' : 'rgba(255,255,255,0.03)',
+                                color: selectedTimeSlot === slot ? 'var(--accent-primary)' : '#fff',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s'
+                              }}
+                            >
+                              {slot}
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
                 
                 <button type="submit" className="btn-submit" disabled={loading}>
-                  {loading ? 'Processando...' : 'Confirmar Presença'}
+                  {loading ? 'Processando...' : (tenant.bookingType === 'appointment' ? 'Agendar Horário' : 'Confirmar Presença')}
                 </button>
                 
                 {tenant.whatsapp && (
@@ -656,11 +805,29 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         {/* Right Side: Queue List */}
         <section className="queue-panel">
           <div className="queue-header">
-            <h2>{prof.queueTitle} {isAuthenticated && <span className="admin-tag" style={{ background: 'var(--accent-primary)', color: '#111' }}>{prof.professional} Logado(a)</span>}</h2>
+            <h2>
+              {tenant.bookingType === 'appointment' ? 'Agendamentos' : prof.queueTitle} 
+              {isAuthenticated && <span className="admin-tag" style={{ background: 'var(--accent-primary)', color: '#111' }}>{prof.professional} Logado(a)</span>}
+            </h2>
           </div>
           
+          {tenant.bookingType === 'appointment' && isAuthenticated && (
+            <div style={{ marginBottom: '1.5rem', background: 'rgba(255,255,255,0.02)', padding: '1rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+              <label style={{ display: 'block', fontSize: '0.8rem', color: '#a1a1aa', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.5rem' }}>Visualizando Agendamentos do Dia:</label>
+              <input 
+                type="date" 
+                value={selectedDate}
+                onChange={(e) => {
+                  setSelectedDate(e.target.value);
+                  setSelectedTimeSlot('');
+                }}
+                style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', padding: '8px 12px', borderRadius: '6px', color: '#fff', width: '100%' }}
+              />
+            </div>
+          )}
+
           <div className="queue-list">
-            {queue.length === 0 ? (
+            {(tenant.bookingType === 'appointment' ? queue.filter(q => q.appointmentTime?.startsWith(selectedDate)) : queue).length === 0 ? (
               <div className="empty-state glass-panel fade-in">
                 <div className="empty-state-icon">
                   <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round">
@@ -670,18 +837,23 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                     <line x1="3" y1="10" x2="21" y2="10"></line>
                   </svg>
                 </div>
-                <h3>A fila está livre</h3>
-                <p>Nenhum cliente aguardando momento.</p>
+                <h3>{tenant.bookingType === 'appointment' ? 'Sem agendamentos' : 'A fila está livre'}</h3>
+                <p>{tenant.bookingType === 'appointment' ? 'Nenhum horário marcado para este dia.' : 'Nenhum cliente aguardando momento.'}</p>
               </div>
             ) : (
-              queue.map((item, index) => (
+              (tenant.bookingType === 'appointment' ? queue.filter(q => q.appointmentTime?.startsWith(selectedDate)).sort((a,b) => (a.appointmentTime || '').localeCompare(b.appointmentTime || '')) : queue).map((item, index) => (
                 <div 
                   key={item.id} 
                   className={`queue-item glass-card fade-in ${item.status}`}
                   style={{ animationDelay: `${index * 0.1}s` }}
                 >
-                  <div className="queue-position">
-                    {index + 1}º
+                  <div className="queue-position" style={tenant.bookingType === 'appointment' ? { width: '60px', height: '60px', borderRadius: '12px', fontSize: '1rem', display: 'flex', flexDirection: 'column', gap: '2px', lineHeight: 1 } : {}}>
+                    {tenant.bookingType === 'appointment' ? (
+                      <>
+                        <span style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.6)' }}>Horário</span>
+                        <span style={{ fontWeight: 800 }}>{item.appointmentTime?.split('T')[1]?.substring(0, 5)}</span>
+                      </>
+                    ) : `${index + 1}º`}
                   </div>
                   
                     <div className="queue-item-info">
@@ -701,12 +873,23 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                   
                   <div className="queue-meta" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.2rem' }}>
                     <div className={`status-badge ${item.status}`}>
-                      {item.status === 'serving' ? 'Em Atendimento' : 'Aguardando'}
+                      {item.status === 'serving' ? 'Em Atendimento' : (tenant.bookingType === 'appointment' ? 'Agendado' : 'Aguardando')}
                     </div>
-                    <div className="queue-time">
-                      🕒 {formatTimeISO(item.joinedAt)}
-                    </div>
-                    {item.status === 'waiting' && isAuthenticated && index === queue.findIndex(i => i.status === 'waiting') && (
+                    {tenant.bookingType !== 'appointment' && (
+                      <div className="queue-time">
+                        🕒 {formatTimeISO(item.joinedAt)}
+                      </div>
+                    )}
+                    {item.status === 'waiting' && isAuthenticated && index === queue.findIndex(i => i.status === 'waiting') && tenant.bookingType !== 'appointment' && (
+                       <button 
+                         className="btn-complete"
+                         style={{ background: 'var(--accent-primary)', color: '#111' }}
+                         onClick={() => handleStartService(item.id)}
+                       >
+                         ▶ Iniciar
+                       </button>
+                    )}
+                    {item.status === 'ready' && isAuthenticated && tenant.bookingType === 'appointment' && (
                        <button 
                          className="btn-complete"
                          style={{ background: 'var(--accent-primary)', color: '#111' }}

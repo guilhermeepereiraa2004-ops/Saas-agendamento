@@ -5,6 +5,7 @@ import SuperAdmin from './SuperAdmin';
 import TenantApp from './TenantApp';
 import { supabase } from './lib/supabase';
 import { ToastProvider } from './components/ToastProvider';
+import { OneSignalInitializer, loginOneSignal, requestNotificationPermission } from './components/OneSignalInitializer';
 
 function App() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
@@ -36,7 +37,9 @@ function App() {
           loginPassword: t.login_password,
           services: typeof t.services === 'string' ? JSON.parse(t.services) : t.services,
           profession: t.profession,
-          isOnline: t.is_online ?? true
+          isOnline: t.is_online ?? true,
+          bookingType: t.booking_type || 'queue',
+          workingHours: typeof t.working_hours === 'string' ? JSON.parse(t.working_hours) : (t.working_hours || [])
         }));
         setTenants(mappedTenants);
       }
@@ -51,6 +54,10 @@ function App() {
     if (adminEmail === 'gestaomulti@gmail.com' && adminPassword === 'naoseinao') {
       setIsAdminAuth(true);
       localStorage.setItem('admin_auth', 'true');
+      
+      // Login no OneSignal para o Super Admin
+      loginOneSignal('super_admin');
+      requestNotificationPermission();
     } else {
       alert('Credenciais administrativas inválidas!');
     }
@@ -249,6 +256,7 @@ function App() {
 
   return (
     <ToastProvider>
+      <OneSignalInitializer />
       {renderContent()}
     </ToastProvider>
   );

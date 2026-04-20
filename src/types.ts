@@ -2,6 +2,7 @@ export interface Service {
   id: string;
   name: string;
   price: number;
+  duration?: number; // duration in minutes
 }
 
 export type Profession = 'barber' | 'manicure' | 'carwash' | 'hairstylist';
@@ -19,6 +20,8 @@ export interface Tenant {
   loginPassword?: string;
   profession?: Profession;
   isOnline?: boolean;
+  bookingType?: 'queue' | 'appointment';
+  workingHours?: { day: number; start: string; end: string }[];
 }
 
 export interface QueueItem {
@@ -30,4 +33,5 @@ export interface QueueItem {
   price: number;
   status: 'serving' | 'ready' | 'waiting';
   joinedAt: string; // ISO string 
+  appointmentTime?: string; // ISO string
 }

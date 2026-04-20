@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS tenants (
     login_email     TEXT,
     login_password  TEXT,
     completed_today INTEGER DEFAULT 0,
+    booking_type    TEXT DEFAULT 'queue' CHECK (booking_type IN ('queue', 'appointment')),
+    working_hours   JSONB DEFAULT '[]'::jsonb,
     created_at      TIMESTAMPTZ DEFAULT now()
 );
 
@@ -40,6 +42,7 @@ CREATE TABLE IF NOT EXISTS queue_items (
     service_name TEXT NOT NULL,
     price       DECIMAL(10,2) NOT NULL,
     status      TEXT NOT NULL CHECK (status IN ('waiting', 'serving', 'ready')),
+    appointment_time TIMESTAMPTZ,
     joined_at   TIMESTAMPTZ DEFAULT now()
 );
 
