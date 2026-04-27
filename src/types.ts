@@ -5,7 +5,7 @@ export interface Service {
   duration?: number; // duration in minutes
 }
 
-export type Profession = 'barber' | 'manicure' | 'carwash' | 'hairstylist';
+export type Profession = 'barber' | 'manicure' | 'carwash' | 'hairstylist' | 'lash' | 'makeup' | 'esthetician';
 
 export interface Tenant {
   id: string;
@@ -22,6 +22,12 @@ export interface Tenant {
   isOnline?: boolean;
   bookingType?: 'queue' | 'appointment';
   workingHours?: { day: number; start: string; end: string }[];
+  isActive?: boolean;
+  // SaaS Subscription Fields
+  subscriptionStatus?: 'active' | 'overdue' | 'pending' | 'trial';
+  nextPaymentAt?: string;
+  paymentDay?: number;
+  monthlyFee?: number;
 }
 
 export interface QueueItem {
@@ -34,4 +40,23 @@ export interface QueueItem {
   status: 'serving' | 'ready' | 'waiting';
   joinedAt: string; // ISO string 
   appointmentTime?: string; // ISO string
+  isOnWay?: boolean;
+  startedAt?: string;
+}
+
+export interface TenantTask {
+  id: string;
+  tenantId: string;
+  title: string;
+  isCompleted: boolean;
+  createdAt: string;
+}
+
+export interface TenantProduct {
+  id: string;
+  tenantId: string;
+  name: string;
+  price: number;
+  imageUrl?: string;
+  createdAt: string;
 }

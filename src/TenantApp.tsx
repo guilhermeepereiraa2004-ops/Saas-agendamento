@@ -1,17 +1,34 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import './App.css';
-import type { QueueItem, Tenant } from './types';
+import type { QueueItem, Tenant, TenantTask, TenantProduct } from './types';
 import { supabase } from './lib/supabase';
 import FinancialView from './FinancialView';
 import { getProfessionConfig } from './lib/professionConfig';
 import { useToasts } from './components/ToastProvider';
 import { loginOneSignal, requestNotificationPermission } from './components/OneSignalInitializer';
 
+function TimeElapsed({ startedAt }: { startedAt: string }) {
+  const [mins, setMins] = useState(0);
+
+  useEffect(() => {
+    const calc = () => {
+      const diffMs = Date.now() - new Date(startedAt).getTime();
+      setMins(Math.max(0, Math.floor(diffMs / 60000)));
+    };
+    calc();
+    const interval = setInterval(calc, 60000);
+    return () => clearInterval(interval);
+  }, [startedAt]);
+
+  return <span style={{ display: 'block', fontSize: '0.75rem', color: '#10b981', marginTop: '4px', fontWeight: 600 }}>Atendimento iniciado há {mins} min</span>;
+}
+
 export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant }) {
   const [tenant, setTenant] = useState<Tenant>(initialTenant);
   const { showToast } = useToasts();
   const [queue, setQueue] = useState<QueueItem[]>([]);
-  
+  const prevQueueRef = useRef<QueueItem[]>([]);
+
   // INITIAL LOAD + REALTIME
   useEffect(() => {
     const mapQueueItem = (q: any): QueueItem => ({
@@ -23,7 +40,9 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       price: parseFloat(q.price),
       status: q.status,
       joinedAt: q.joined_at,
-      appointmentTime: q.appointment_time
+      appointmentTime: q.appointment_time,
+      isOnWay: q.is_on_way,
+      startedAt: q.started_at
     });
 
     const fetchData = async () => {
@@ -143,58 +162,25 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     }
   }, [tenant.services]);
 
-  const getBookedSlots = () => {
-    return queue
-      .filter(q => q.appointmentTime && q.appointmentTime.startsWith(selectedDate))
-      .map(q => {
-        const timePart = q.appointmentTime!.split('T')[1];
-        return timePart ? timePart.substring(0, 5) : null;
-      })
-      .filter(Boolean) as string[];
-  };
-
-  const getAvailableSlots = () => {
-    if (!tenant.workingHours || tenant.workingHours.length === 0) return [];
-    
-    // JS getDay(): 0=Sun, 1=Mon... Our db workingHours: 0=Dom, 1=Seg...
-    const dateObj = new Date(selectedDate + "T12:00:00"); // 12:00 to avoid timezone shift
-    const dayOfWeek = dateObj.getDay(); 
-    
-    const wh = tenant.workingHours.find(h => h.day === dayOfWeek);
-    if (!wh) return [];
-
-    const service = tenant.services.find(s => s.id === selectedServiceId);
-    if (!service || !service.duration) return [];
-
-    const startParts = wh.start.split(':').map(Number);
-    const endParts = wh.end.split(':').map(Number);
-    let currentMins = startParts[0] * 60 + startParts[1];
-    const endMins = endParts[0] * 60 + endParts[1];
-
-    const bookedSlots = getBookedSlots();
-    const slots = [];
-    
-    while (currentMins + service.duration <= endMins) {
-      const h = Math.floor(currentMins / 60).toString().padStart(2, '0');
-      const m = (currentMins % 60).toString().padStart(2, '0');
-      const timeString = `${h}:${m}`;
-      
-      // Calculate slot end time to check overlap if needed, but for simplicity we assume exact slots
-      if (!bookedSlots.includes(timeString)) {
-        slots.push(timeString);
-      }
-      currentMins += service.duration;
-    }
-    return slots;
-  };
-
   // Auth state specifics to this tenant
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showLogin, setShowLogin] = useState(false);
-  const [activeTab, setActiveTab] = useState<'queue' | 'financial'>('queue');
+  const [activeTab, setActiveTab] = useState<'queue' | 'financial' | 'tasks' | 'store'>('queue');
+  const [tasks, setTasks] = useState<TenantTask[]>([]);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [products, setProducts] = useState<TenantProduct[]>([]);
+  const [showStoreModal, setShowStoreModal] = useState(false);
+  const [newProductName, setNewProductName] = useState('');
+  const [newProductPrice, setNewProductPrice] = useState('');
+  const [newProductImage, setNewProductImage] = useState('');
+  const [newProductImageFile, setNewProductImageFile] = useState<File | null>(null);
+  const [newProductImagePreview, setNewProductImagePreview] = useState<string>('');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isAdminAddModalOpen, setIsAdminAddModalOpen] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
+  const [showLeaveModal, setShowLeaveModal] = useState(false);
 
   // Load stats from localStorage on mount (for persistent auth)
   useEffect(() => {
@@ -204,6 +190,112 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       setIsAuthenticated(true);
     }
   }, [tenant.slug]);
+
+  const fetchTasks = async () => {
+    const { data } = await supabase
+      .from('tenant_tasks')
+      .select('*')
+      .eq('tenant_id', tenant.id)
+      .order('created_at', { ascending: false });
+    if (data) {
+      setTasks(data.map((t: any) => ({
+        id: t.id,
+        tenantId: t.tenant_id,
+        title: t.title,
+        isCompleted: t.is_completed,
+        createdAt: t.created_at
+      })));
+    }
+  };
+
+  const fetchProducts = async () => {
+    const { data } = await supabase
+      .from('tenant_products')
+      .select('*')
+      .eq('tenant_id', tenant.id)
+      .order('created_at', { ascending: false });
+    if (data) {
+      setProducts(data.map((p: any) => ({
+        id: p.id,
+        tenantId: p.tenant_id,
+        name: p.name,
+        price: parseFloat(p.price),
+        imageUrl: p.image_url,
+        createdAt: p.created_at
+      })));
+    }
+  };
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchTasks();
+      fetchProducts();
+    }
+  }, [isAuthenticated, tenant.id]);
+
+  // Always load products for client-side store button
+  useEffect(() => {
+    fetchProducts();
+  }, [tenant.id]);
+
+  // Compress image via Canvas before upload (max 800px, 75% quality JPEG)
+  const compressImage = (file: File): Promise<Blob> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onload = () => {
+          const MAX = 800;
+          let { width, height } = img;
+          if (width > MAX || height > MAX) {
+            if (width > height) { height = Math.round(height * MAX / width); width = MAX; }
+            else { width = Math.round(width * MAX / height); height = MAX; }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          canvas.getContext('2d')!.drawImage(img, 0, 0, width, height);
+          canvas.toBlob((blob) => resolve(blob!), 'image/jpeg', 0.75);
+        };
+        img.src = ev.target!.result as string;
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  // Notificar admin quando alguém está a caminho
+  useEffect(() => {
+    if (isAuthenticated) {
+      queue.forEach(item => {
+        const prevItem = prevQueueRef.current.find(p => p.id === item.id);
+        if (item.isOnWay && (!prevItem || !prevItem.isOnWay)) {
+          showToast(`🚗 O cliente ${item.name} confirmou que está a caminho!`, 'info');
+        }
+      });
+    }
+    prevQueueRef.current = queue;
+  }, [queue, isAuthenticated]);
+
+  const [myQueueItemId, setMyQueueItemId] = useState<string | null>(() => 
+    localStorage.getItem(`suavez_customer_id_${tenant.id}`)
+  );
+
+  const amIInQueue = queue.find(item => item.id === myQueueItemId);
+
+  // Limpar localStorage se não estiver mais na fila
+  useEffect(() => {
+    if (myQueueItemId && !amIInQueue && queue.length > 0) {
+      // Pequeno delay para garantir que a fila carregou
+      const timer = setTimeout(() => {
+        if (!queue.find(item => item.id === myQueueItemId)) {
+          localStorage.removeItem(`suavez_customer_id_${tenant.id}`);
+          localStorage.removeItem(`suavez_in_queue_${tenant.id}`);
+          setMyQueueItemId(null);
+        }
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [queue, myQueueItemId]);
 
   // Trigger confirmation modal
   const handleJoinQueue = (e: React.FormEvent) => {
@@ -216,10 +308,16 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     setShowConfirmation(true);
   };
 
+  // Status counts for the summary bar
+  const servingCount = queue.filter(item => item.status === 'serving').length;
+  const waitingCount = queue.filter(item => item.status === 'waiting' || item.status === 'ready').length;
+  const totalCount = queue.length;
+
   // Handle actual adding to queue
   const confirmJoinQueue = async () => {
     setShowConfirmation(false);
     setLoading(true);
+    const startTime = Date.now();
 
     try {
       // 1. Anti-spam check: check if this WhatsApp is already in the queue for this tenant
@@ -231,7 +329,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         .in('status', ['waiting', 'serving'])
         .maybeSingle();
 
-      if (existing) {
+      if (existing && !import.meta.env.DEV) {
         showToast('Você já está na fila deste estabelecimento!', 'warning');
         setLoading(false);
         return;
@@ -243,7 +341,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         return;
       }
 
-      const { error } = await supabase.from('queue_items').insert([{
+      const { data, error } = await supabase.from('queue_items').insert([{
         tenant_id: tenant.id,
         name: name.trim(),
         whatsapp: customerWhatsapp.trim(),
@@ -252,18 +350,24 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         price: selectedSvc.price,
         status: tenant.bookingType === 'appointment' ? 'ready' : 'waiting', // Appointments skip waiting to be 'served' by time
         appointment_time: tenant.bookingType === 'appointment' ? `${selectedDate}T${selectedTimeSlot}:00` : null
-      }]);
+      }]).select();
 
-      if (!error) {
+      if (!error && data) {
         setName('');
         setCustomerWhatsapp('');
         // Store in localStorage that THIS user is in the queue to show a special message
         localStorage.setItem(`suavez_in_queue_${tenant.id}`, 'true');
+        localStorage.setItem(`suavez_customer_id_${tenant.id}`, data[0].id);
+        setMyQueueItemId(data[0].id);
         showToast('Presença confirmada com sucesso!', 'success');
       } else {
         showToast('Erro ao entrar na fila: ' + error.message, 'error');
       }
     } finally {
+      const elapsedTime = Date.now() - startTime;
+      if (elapsedTime < 1200) {
+        await new Promise(resolve => setTimeout(resolve, 1200 - elapsedTime));
+      }
       setLoading(false);
     }
   };
@@ -294,7 +398,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
   const handleStartService = async (id: string) => {
     if (!isAuthenticated) return;
-    await supabase.from('queue_items').update({ status: 'serving' }).eq('id', id);
+    await supabase.from('queue_items').update({ status: 'serving', started_at: new Date().toISOString() }).eq('id', id);
   };
 
   const handleRemoveFromQueue = async (id: string) => {
@@ -303,6 +407,44 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     await supabase.from('queue_items').delete().eq('id', id);
   };
 
+  const handleConfirmOnWay = async (id: string) => {
+    setLoading(true);
+    const { error } = await supabase
+      .from('queue_items')
+      .update({ is_on_way: true })
+      .eq('id', id);
+    setLoading(false);
+    
+    if (error) {
+      showToast('Erro ao confirmar presença: ' + error.message, 'error');
+    } else {
+      showToast('Presença confirmada! O profissional foi avisado.', 'success');
+    }
+  };
+
+  const handleCancelMyPlace = async () => {
+    if (!myQueueItemId) return;
+    setShowLeaveModal(false);
+    
+    setLoading(true);
+    try {
+      const { error } = await supabase
+        .from('queue_items')
+        .delete()
+        .eq('id', myQueueItemId);
+      
+      if (error) {
+        showToast('Erro ao cancelar: ' + error.message, 'error');
+      } else {
+        localStorage.removeItem(`suavez_customer_id_${tenant.id}`);
+        localStorage.removeItem(`suavez_in_queue_${tenant.id}`);
+        setMyQueueItemId(null);
+        showToast('Você saiu da fila.', 'info');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     const validEmail = tenant.loginEmail || 'admin@suavez.com';
@@ -313,11 +455,57 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       setShowLogin(false);
       showToast('Login realizado com sucesso!', 'success');
       
+      // Persistir login para não deslogar ao atualizar
+      localStorage.setItem(`suavez_auth_${tenant.slug}`, 'true');
+      
       // Logar no OneSignal para receber notificações de admin
       loginOneSignal(`admin_${tenant.id}`);
       requestNotificationPermission();
     } else {
       showToast('E-mail ou senha incorretos!', 'error');
+    }
+  };
+
+  const handleAddTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTaskTitle.trim()) return;
+
+    const { data, error } = await supabase
+      .from('tenant_tasks')
+      .insert([{
+        tenant_id: tenant.id,
+        title: newTaskTitle.trim(),
+        is_completed: false
+      }])
+      .select();
+
+    if (!error && data) {
+      setNewTaskTitle('');
+      fetchTasks();
+      showToast('Atividade adicionada!', 'success');
+    }
+  };
+
+  const handleToggleTask = async (id: string, currentStatus: boolean) => {
+    const { error } = await supabase
+      .from('tenant_tasks')
+      .update({ is_completed: !currentStatus })
+      .eq('id', id);
+
+    if (!error) {
+      fetchTasks();
+    }
+  };
+
+  const handleDeleteTask = async (id: string) => {
+    const { error } = await supabase
+      .from('tenant_tasks')
+      .delete()
+      .eq('id', id);
+
+    if (!error) {
+      fetchTasks();
+      showToast('Atividade removida!', 'info');
     }
   };
 
@@ -373,568 +561,830 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   };
 
+  // Helper to hex to rgb
+  const hexToRgb = (hex: string) => {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result ? `${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}` : '212, 175, 55';
+  };
+
   // Dynamic CSS variables for tenant theme dynamically applied to document root 
   useEffect(() => {
-    document.documentElement.style.setProperty('--accent-primary', tenant.primaryColor || '#d4af37');
+    const color = tenant.primaryColor || '#d4af37';
+    document.documentElement.style.setProperty('--accent-primary', color);
+    document.documentElement.style.setProperty('--accent-primary-rgb', hexToRgb(color));
     
     // Cleanup if leaving tenant view
     return () => {
       document.documentElement.style.removeProperty('--accent-primary');
+      document.documentElement.style.removeProperty('--accent-primary-rgb');
     };
   }, [tenant.primaryColor]);
 
   return (
-    <div className="app-container fade-in">
-      {/* Role Switcher Toolbar */}
-      <div className="role-switcher">
-        <button onClick={toggleRole} className="btn-role">
-          {isAuthenticated ? `Sair (${prof.professional})` : 'Acesso Restrito'}
-        </button>
-        {isAuthenticated && (
-          <button 
-            onClick={toggleStatus} 
-            className={`btn-role ${tenant.isOnline ? 'online' : 'offline'}`}
-            style={{ 
-              background: tenant.isOnline ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-              color: tenant.isOnline ? '#10b981' : '#ef4444',
-              border: `1px solid ${tenant.isOnline ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)'}`,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}
-          >
-            <span style={{ 
-              width: '8px', 
-              height: '8px', 
-              borderRadius: '50%', 
-              background: tenant.isOnline ? '#10b981' : '#ef4444',
-              boxShadow: tenant.isOnline ? '0 0 8px #10b981' : 'none'
-            }}></span>
-            {tenant.isOnline ? 'Online' : 'Offline'}
-          </button>
-        )}
-      </div>
-
-      {/* Login Modal */}
+    <>
+      {/* Professional Login Page (Full Screen Overlay) */}
       {showLogin && (
-        <div className="modal-overlay">
-          <div className="modal-content glass-panel fade-in">
-            <h3>Acesso Restrito - {tenant.name}</h3>
-            <form onSubmit={handleLogin}>
-              <div className="form-group">
-                <label>E-mail</label>
-                <input 
-                  type="email" 
-                  value={loginEmail} 
-                  onChange={(e) => setLoginEmail(e.target.value)} 
-                  placeholder="teste@gmail.com"
-                  required 
-                />
+        <div className="login-page-overlay fade-in">
+          <div className="login-page-container">
+            <button className="login-back-button" onClick={() => setShowLogin(false)}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+              Voltar para o site
+            </button>
+
+            <div className="login-card glass-panel">
+              <div className="login-header">
+                <div className="login-logo">
+                  {tenant.hasLogo && tenant.logoUrl ? (
+                    <img src={tenant.logoUrl} alt="Logo" />
+                  ) : (
+                    <div dangerouslySetInnerHTML={{ __html: (prof?.iconSvg || '').replace('width="28" height="28"', 'width="36" height="36"') }} />
+                  )}
+                </div>
+                <h2>Acesso Profissional</h2>
+                <p>Gerencie sua fila e agendamentos em tempo real.</p>
               </div>
-              <div className="form-group">
-                <label>Senha</label>
-                <input 
-                  type="password" 
-                  value={loginPassword} 
-                  onChange={(e) => setLoginPassword(e.target.value)} 
-                  placeholder="******"
-                  required 
-                />
+
+              <form onSubmit={handleLogin} className="login-form">
+                <div className="form-group">
+                  <label>E-mail de Acesso</label>
+                  <div className="input-with-icon">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+                    <input 
+                      type="email" 
+                      value={loginEmail} 
+                      onChange={(e) => setLoginEmail(e.target.value)} 
+                      placeholder="seu@email.com"
+                      required 
+                    />
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label>Sua Senha</label>
+                  <div className="input-with-icon">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                    <input 
+                      type="password" 
+                      value={loginPassword} 
+                      onChange={(e) => setLoginPassword(e.target.value)} 
+                      placeholder="••••••••"
+                      required 
+                    />
+                  </div>
+                </div>
+
+                <button type="submit" className="btn-submit login-btn">
+                  Acessar Painel
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+                </button>
+              </form>
+
+              <div className="login-footer">
+                <p>Esqueceu sua senha? Entre em contato com o suporte do Sua Vez.</p>
               </div>
-              <div style={{ display: 'flex', gap: '1rem' }}>
-                <button type="submit" className="btn-submit">Entrar</button>
-                <button type="button" onClick={() => setShowLogin(false)} className="btn-secondary">Cancelar</button>
-              </div>
-            </form>
+            </div>
           </div>
         </div>
       )}
+
+      {isAuthenticated ? (
+        /* PROFESSIONAL ADMIN LAYOUT */
+        <div className="admin-layout-wrapper fade-in" style={{ backgroundColor: '#f8fafc', minHeight: '100vh', position: 'relative' }}>
+          {/* MOBILE BACKDROP */}
+          {isMobileMenuOpen && (
+            <div className="sidebar-mobile-backdrop" onClick={() => setIsMobileMenuOpen(false)}></div>
+          )}
+          
+          {/* SIDEBAR */}
+          <aside className={`admin-sidebar ${isMobileMenuOpen ? 'open' : ''}`}>
+            <div className="sidebar-header">
+              <div className="sidebar-logo">
+                {tenant.hasLogo && tenant.logoUrl ? (
+                  <img src={tenant.logoUrl} alt="Logo" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  <div dangerouslySetInnerHTML={{ __html: (prof?.iconSvg || '').replace('width="28" height="28"', 'width="24" height="24"') }} />
+                )}
+              </div>
+              <div className="sidebar-brand">
+                <h3>{tenant.name}</h3>
+                <p>Painel Administrativo</p>
+              </div>
+            </div>
+
+            <nav className="sidebar-nav">
+              <button 
+                className={`nav-item ${activeTab === 'queue' ? 'active' : ''}`}
+                style={{ cursor: 'pointer' }}
+                onClick={() => { setActiveTab('queue'); setIsMobileMenuOpen(false); }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                {tenant.bookingType === 'appointment' ? 'Agendamentos' : 'Fila de Espera'}
+              </button>
+              <button 
+                className={`nav-item ${activeTab === 'financial' ? 'active' : ''}`}
+                style={{ cursor: 'pointer' }}
+                onClick={() => { setActiveTab('financial'); setIsMobileMenuOpen(false); }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+                Financeiro
+              </button>
+              <button 
+                className={`nav-item ${activeTab === 'tasks' ? 'active' : ''}`}
+                style={{ cursor: 'pointer' }}
+                onClick={() => { setActiveTab('tasks'); setIsMobileMenuOpen(false); }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+                Controle de Atividades
+              </button>
+              <button 
+                className={`nav-item ${activeTab === 'store' ? 'active' : ''}`}
+                style={{ cursor: 'pointer' }}
+                onClick={() => { setActiveTab('store'); setIsMobileMenuOpen(false); }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path><line x1="3" y1="6" x2="21" y2="6"></line><path d="M16 10a4 4 0 0 1-8 0"></path></svg>
+                Loja
+              </button>
+            </nav>
+
+            <div className="sidebar-footer">
+              <div className="tenant-status-card">
+                <div className="status-indicator">
+                  <div className={`status-dot ${tenant.isOnline ? 'online' : 'offline'}`}></div>
+                  <span>Status: {tenant.isOnline ? 'Online' : 'Offline'}</span>
+                </div>
+                <button 
+                  onClick={toggleStatus} 
+                  className="btn-toggle-status"
+                  style={{ background: tenant.isOnline ? '#ef4444' : '#10b981', color: '#fff' }}
+                >
+                  {tenant.isOnline ? 'Fechar Loja' : 'Abrir Loja'}
+                </button>
+              </div>
+              <button onClick={toggleRole} className="btn-logout">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                Sair do Painel
+              </button>
+            </div>
+          </aside>
+
+          {/* MAIN CONTENT */}
+          <main className="admin-main-content">
+            <header className="admin-topbar">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <button className="mobile-menu-btn" onClick={() => setIsMobileMenuOpen(true)}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                </button>
+                <div className="topbar-info">
+                <h1>
+                    {activeTab === 'queue' ? (tenant.bookingType === 'appointment' ? 'Agenda de Hoje' : 'Fila de Espera') : 
+                     activeTab === 'financial' ? 'Controle Financeiro' :
+                     activeTab === 'tasks' ? 'Controle de Atividades' : 'Minha Loja'}
+                  </h1>
+                  <p>{new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
+                </div>
+              </div>
+              <div className="topbar-actions" style={{ display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
+                  <div className="subscription-badge">
+                    <div className={`sub-dot ${tenant.subscriptionStatus === 'active' ? 'active' : 'warning'}`}></div>
+                    <span>Plano {tenant.subscriptionStatus === 'active' ? 'Ativo' : 'Pendente'}</span>
+                  </div>
+                  <button 
+                    onClick={() => setIsAdminAddModalOpen(true)}
+                    style={{ 
+                      padding: '10px 20px', 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      justifyContent: 'center',
+                      gap: '8px',
+                      background: '#0f172a',
+                      color: '#fff',
+                      borderRadius: '12px',
+                      fontWeight: 700,
+                      fontSize: '0.85rem',
+                      border: 'none',
+                      cursor: 'pointer',
+                      flexShrink: 0,
+                      boxShadow: '0 4px 12px rgba(15, 23, 42, 0.15)'
+                    }}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                    Novo Cliente
+                  </button>
+               </div>
+            </header>
+
+            {isAdminAddModalOpen && (
+               <div className="modal-overlay" style={{ zIndex: 10000, position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                 <div className="modal-content glass-panel fade-in" style={{ maxWidth: '500px', width: '90%', background: '#ffffff', color: 'var(--text-primary)', border: '1px solid rgba(0,0,0,0.1)', padding: '2rem', borderRadius: '20px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+                      <h3 style={{ fontSize: '1.25rem', margin: 0 }}>Adicionar Cliente à Fila</h3>
+                      <button onClick={() => setIsAdminAddModalOpen(false)} style={{ background: 'transparent', border: 'none', color: '#a1a1aa' }}>
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                      </button>
+                    </div>
+
+                    <form onSubmit={async (e) => {
+                      e.preventDefault();
+                      await confirmJoinQueue();
+                      setIsAdminAddModalOpen(false);
+                    }}>
+                      <div className="form-group" style={{ marginBottom: '1.25rem' }}>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', color: '#a1a1aa' }}>Nome do Cliente</label>
+                        <input type="text" value={name} onChange={(e) => setName(e.target.value)} required style={{ width: '100%', padding: '12px', background: 'rgba(0,0,0,0.05)', border: '1px solid rgba(0,0,0,0.1)', borderRadius: '8px', color: 'var(--text-primary)' }} />
+                      </div>
+                      <div className="form-group" style={{ marginBottom: '1.25rem' }}>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', color: '#a1a1aa' }}>WhatsApp</label>
+                        <input type="tel" value={customerWhatsapp} onChange={handlePhoneChange} required style={{ width: '100%', padding: '12px', background: 'rgba(0,0,0,0.05)', border: '1px solid rgba(0,0,0,0.1)', borderRadius: '8px', color: 'var(--text-primary)' }} />
+                      </div>
+                      
+                      <div style={{ display: 'grid', gridTemplateColumns: tenant.bookingType === 'appointment' ? '1fr 1fr' : '1fr', gap: '1rem', marginBottom: '1.25rem' }}>
+                        <div className="form-group">
+                          <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', color: '#a1a1aa' }}>Serviço</label>
+                          <select 
+                            value={selectedServiceId} 
+                            onChange={(e) => setSelectedServiceId(e.target.value)} 
+                            required
+                            style={{ width: '100%', padding: '12px', background: 'rgba(0,0,0,0.05)', border: '1px solid rgba(0,0,0,0.1)', borderRadius: '8px', color: 'var(--text-primary)' }}
+                          >
+                            <option value="">Selecione...</option>
+                            {tenant.services.map(s => (
+                              <option key={s.id} value={s.id}>{s.name} - R$ {s.price}</option>
+                            ))}
+                          </select>
+                        </div>
+                        
+                        {tenant.bookingType === 'appointment' && (
+                          <div className="form-group">
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', color: '#a1a1aa' }}>Data</label>
+                            <input 
+                              type="date" 
+                              value={selectedDate} 
+                              onChange={(e) => setSelectedDate(e.target.value)} 
+                              required 
+                              style={{ width: '100%', padding: '12px', background: 'rgba(0,0,0,0.05)', border: '1px solid rgba(0,0,0,0.1)', borderRadius: '8px', color: 'var(--text-primary)' }} 
+                            />
+                          </div>
+                        )}
+                      </div>
+
+                      {tenant.bookingType === 'appointment' && (
+                        <div className="form-group" style={{ marginBottom: '2rem' }}>
+                          <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', color: '#a1a1aa' }}>Horário Disponível</label>
+                          <select 
+                            value={selectedTimeSlot} 
+                            onChange={(e) => setSelectedTimeSlot(e.target.value)} 
+                            required
+                            style={{ width: '100%', padding: '12px', background: 'rgba(0,0,0,0.05)', border: '1px solid rgba(0,0,0,0.1)', borderRadius: '8px', color: 'var(--text-primary)' }}
+                          >
+                            <option value="">Selecione um horário...</option>
+                            {/* Simple list of common hours or we could use the generateSlots logic if available */}
+                            {['09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '13:00', '13:30', '14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30'].map(slot => (
+                              <option key={slot} value={slot}>{slot}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      <button type="submit" className="btn-submit" style={{ width: '100%', padding: '14px', background: 'var(--accent-primary)', color: '#000', fontWeight: 800, borderRadius: '10px' }}>
+                        {tenant.bookingType === 'appointment' ? 'Agendar Cliente' : 'Colocar na Fila'}
+                      </button>
+                    </form>
+                 </div>
+               </div>
+             )}
+
+            <div className="admin-content-scroll">
+
+              {activeTab === 'financial' ? (
+                <FinancialView tenantId={tenant.id} />
+
+              ) : activeTab === 'tasks' ? (
+                <div className="fade-in">
+                  <div className="premium-card" style={{ padding: '2rem' }}>
+                    <h2 style={{ marginBottom: '1.5rem', fontSize: '1.25rem' }}>Minhas Atividades</h2>
+                    <form onSubmit={handleAddTask} style={{ display: 'flex', gap: '10px', marginBottom: '2rem' }}>
+                      <input type="text" value={newTaskTitle} onChange={(e) => setNewTaskTitle(e.target.value)} placeholder="Adicione uma nova atividade..." style={{ flexGrow: 1 }} />
+                      <button type="submit" className="btn-submit" style={{ width: 'auto', padding: '0 20px', background: '#0f172a', color: '#fff' }}>Adicionar</button>
+                    </form>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      {tasks.length === 0 ? (
+                        <p style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>Nenhuma atividade pendente.</p>
+                      ) : (
+                        tasks.map(task => (
+                          <div key={task.id} className="glass-card" style={{ padding: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', background: '#fff' }}>
+                            <input 
+                              type="checkbox" 
+                              checked={task.isCompleted} 
+                              onChange={() => handleToggleTask(task.id, task.isCompleted)}
+                              style={{ width: '20px', height: '20px', cursor: 'pointer' }}
+                            />
+                            <span style={{ 
+                              flexGrow: 1, 
+                              textDecoration: task.isCompleted ? 'line-through' : 'none',
+                              opacity: task.isCompleted ? 0.5 : 1,
+                              color: 'var(--text-primary)',
+                              fontSize: '1rem',
+                              fontWeight: 500
+                            }}>
+                              {task.title}
+                            </span>
+                            <button 
+                              onClick={() => handleDeleteTask(task.id)} 
+                              style={{ background: 'transparent', color: '#ef4444', padding: '5px', borderRadius: '5px', cursor: 'pointer' }}
+                            >
+                              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+              ) : activeTab === 'store' ? (
+                <div className="fade-in">
+                  <div className="premium-card" style={{ padding: '2rem' }}>
+                    <h2 style={{ marginBottom: '0.5rem', fontSize: '1.25rem' }}>Produtos da Loja</h2>
+                    <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem', fontSize: '0.9rem' }}>Adicione produtos que você usa e recomenda. Seus clientes poderão visualizá-los.</p>
+                    <form onSubmit={async (e) => {
+                      e.preventDefault();
+                      if (!newProductName || !newProductPrice) return;
+                      let imageUrl = newProductImage || null;
+
+                      // Upload file if selected
+                      if (newProductImageFile) {
+                        let uploadBlob: Blob = newProductImageFile;
+                        try { uploadBlob = await compressImage(newProductImageFile); } catch {}
+                        const filePath = `products/${tenant.id}/${Date.now()}.jpg`;
+                        const { data: uploadData, error: uploadError } = await supabase.storage
+                          .from('product-images')
+                          .upload(filePath, uploadBlob, { upsert: true, contentType: 'image/jpeg' });
+                        if (!uploadError && uploadData) {
+                          const { data: publicData } = supabase.storage.from('product-images').getPublicUrl(uploadData.path);
+                          imageUrl = publicData.publicUrl;
+                        } else if (uploadError) {
+                          showToast('Erro ao enviar imagem: ' + uploadError.message, 'error');
+                          return;
+                        }
+                      }
+
+                      const { error } = await supabase.from('tenant_products').insert([{ tenant_id: tenant.id, name: newProductName, price: parseFloat(newProductPrice.replace(',','.')), image_url: imageUrl }]);
+                      if (!error) {
+                        setNewProductName('');
+                        setNewProductPrice('');
+                        setNewProductImage('');
+                        setNewProductImageFile(null);
+                        setNewProductImagePreview('');
+                        fetchProducts();
+                        showToast('Produto adicionado!', 'success');
+                      }
+                    }} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '2rem' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1rem' }}>
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label style={{ fontSize: '0.8rem' }}>Nome do produto</label>
+                          <input type="text" value={newProductName} onChange={e => setNewProductName(e.target.value)} placeholder="Ex: Pomada X" required />
+                        </div>
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label style={{ fontSize: '0.8rem' }}>Preço (R$)</label>
+                          <input type="text" value={newProductPrice} onChange={e => setNewProductPrice(e.target.value)} placeholder="29,90" required />
+                        </div>
+                      </div>
+
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label style={{ fontSize: '0.8rem' }}>Foto do produto</label>
+                        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                          <label style={{ 
+                            display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 18px',
+                            border: '2px dashed #cbd5e1', borderRadius: '10px', cursor: 'pointer',
+                            background: '#f8fafc', color: '#64748b', fontSize: '0.875rem', fontWeight: 600,
+                            transition: 'all 0.2s'
+                          }}>
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+                            {newProductImageFile ? newProductImageFile.name : 'Selecionar foto'}
+                            <input 
+                              type="file" 
+                              accept="image/*" 
+                              style={{ display: 'none' }}
+                              onChange={async (e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  // Show original as preview immediately
+                                  setNewProductImagePreview(URL.createObjectURL(file));
+                                  // Store file for upload (will be compressed on submit)
+                                  setNewProductImageFile(file);
+                                  showToast('Foto selecionada — será comprimida ao salvar 🗜️', 'success');
+                                }
+                              }}
+                            />
+                          </label>
+                          {newProductImagePreview && (
+                            <div style={{ position: 'relative' }}>
+                              <img src={newProductImagePreview} alt="preview" style={{ width: '60px', height: '60px', objectFit: 'cover', borderRadius: '8px', border: '1px solid #e2e8f0' }} />
+                              <button type="button" onClick={() => { setNewProductImageFile(null); setNewProductImagePreview(''); }} style={{ position: 'absolute', top: '-6px', right: '-6px', background: '#ef4444', color: '#fff', borderRadius: '50%', width: '18px', height: '18px', fontSize: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                        <button type="submit" className="btn-submit" style={{ width: 'auto', padding: '0 24px', background: '#0f172a', color: '#fff' }}>Adicionar Produto</button>
+                      </div>
+                    </form>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '1rem' }}>
+                      {products.length === 0 ? (
+                        <p style={{ color: 'var(--text-secondary)', padding: '2rem', gridColumn: '1/-1', textAlign: 'center' }}>Nenhum produto cadastrado ainda.</p>
+                      ) : products.map(p => (
+                        <div key={p.id} style={{ border: '1px solid #e2e8f0', borderRadius: '16px', overflow: 'hidden', background: '#fff' }}>
+                          {p.imageUrl ? <img src={p.imageUrl} alt={p.name} style={{ width: '100%', height: '140px', objectFit: 'cover' }} /> : (
+                            <div style={{ width: '100%', height: '140px', background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path><line x1="3" y1="6" x2="21" y2="6"></line><path d="M16 10a4 4 0 0 1-8 0"></path></svg>
+                            </div>
+                          )}
+                          <div style={{ padding: '1rem' }}>
+                            <div style={{ fontWeight: 700, color: '#0f172a', marginBottom: '4px' }}>{p.name}</div>
+                            <div style={{ fontWeight: 800, color: '#10b981', fontSize: '1.1rem', marginBottom: '0.75rem' }}>R$ {p.price.toFixed(2).replace('.',',')}</div>
+                            <button onClick={async () => { await supabase.from('tenant_products').delete().eq('id', p.id); fetchProducts(); }} style={{ background: 'transparent', color: '#ef4444', fontSize: '0.8rem', cursor: 'pointer' }}>Remover</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+              ) : (
+                <div className="admin-dashboard-container">
+                  <div className="admin-stats-row">
+                    <div className="admin-stat-card"><span className="stat-label">Clientes Hoje</span><span className="stat-value">{completedCount}</span></div>
+                    <div className="admin-stat-card"><span className="stat-label">Em Espera</span><span className="stat-value">{waitingCount}</span></div>
+                    <div className="admin-stat-card"><span className="stat-label">Atendendo Agora</span><span className="stat-value">{servingCount}</span></div>
+                  </div>
+                  <div className="admin-queue-list-section">
+                    <div className="section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                      <h2 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Gestão de Atendimento</h2>
+                      <div className="live-indicator"><span className="live-dot"></span>AO VIVO</div>
+                    </div>
+                    <div className="admin-queue-list">
+                      {queue.length === 0 ? (
+                        <div className="empty-state" style={{ padding: '4rem', textAlign: 'center', background: '#fff', borderRadius: '20px', border: '1px dashed #e2e8f0' }}>
+                          <p style={{ color: '#64748b', fontWeight: 500 }}>Nenhum cliente na fila no momento.</p>
+                        </div>
+                      ) : queue.map((item, index) => (
+                        <div key={item.id} className={`admin-queue-item ${item.status}`}>
+                          <div className="item-pos">{index + 1}º</div>
+                          <div className="item-main">
+                            <h4 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              {item.name}
+                              {item.isOnWay && <span style={{ fontSize: '0.7rem', background: '#3b82f6', color: '#fff', padding: '2px 8px', borderRadius: '12px', fontWeight: 700 }}>🚗 A CAMINHO</span>}
+                            </h4>
+                            <span className="item-service">{item.serviceName} {item.appointmentTime ? `• 🕒 ${formatTimeISO(item.appointmentTime)}` : ''}</span>
+                            {item.status === 'serving' && item.startedAt && <TimeElapsed startedAt={item.startedAt} />}
+                          </div>
+                          <div className="item-actions">
+                            {item.status === 'waiting' && <button onClick={() => handleStartService(item.id)} className="btn-action-start">Atender</button>}
+                            {item.status === 'serving' && <button onClick={() => handleCompleteService(item.id)} className="btn-action-complete">Finalizar</button>}
+                            <button onClick={() => handleRemoveFromQueue(item.id)} className="btn-action-remove">✕</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+            </div>
+          </main>
+        </div>
+      ) : (
+        /* CLIENT VIEW */
+        <div className="app-container fade-in">
+          {/* Header Action */}
+          <div className="role-switcher">
+            <button onClick={toggleRole} className="btn-role">
+              Acesso Restrito
+            </button>
+          </div>
+
+          {/* Hero Section */}
+          <section className="hero-section fade-in">
+            <div className="hero-background-glow"></div>
+            <div className="hero-content">
+              <div className="hero-brand">
+                <div className="hero-logo-container">
+                  {tenant.hasLogo && tenant.logoUrl ? (
+                    <img 
+                      src={tenant.logoUrl} 
+                      alt={`${tenant.name} Logo`} 
+                      className="hero-logo-img"
+                    />
+                  ) : (
+                    <div 
+                      className="hero-logo-icon"
+                      dangerouslySetInnerHTML={{ __html: (prof?.iconSvg || '').replace('width="28" height="28"', 'width="48" height="48"') }}
+                    />
+                  )}
+                </div>
+                <div className="hero-text">
+                  <h1 className="hero-title">{tenant.name}</h1>
+                  <p className="hero-subtitle">
+                    {tenant.bookingType === 'appointment' 
+                      ? `Agende seu horário com os melhores profissionais de ${prof.label.toLowerCase()}.` 
+                      : `Entre na fila virtual e economize tempo esperando de onde quiser.`}
+                  </p>
+                </div>
+              </div>
+
+              <div className="hero-stats">
+                 <div className="client-hero-actions">
+                   {!amIInQueue && tenant.isOnline && (
+                     <button 
+                       onClick={() => document.querySelector('.form-panel')?.scrollIntoView({ behavior: 'smooth' })}
+                       className="hero-cta-button"
+                     >
+                       {tenant.bookingType === 'appointment' ? 'Agendar Agora' : 'Garantir meu Lugar'}
+                     </button>
+                   )}
+                   {products.length > 0 && (
+                     <button
+                       onClick={() => setShowStoreModal(true)}
+                       style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '12px 24px', borderRadius: '12px', border: '2px solid #0f172a', background: 'transparent', color: '#0f172a', fontWeight: 700, cursor: 'pointer', fontSize: '0.95rem', marginTop: '0.5rem' }}
+                     >
+                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path><line x1="3" y1="6" x2="21" y2="6"></line><path d="M16 10a4 4 0 0 1-8 0"></path></svg>
+                       Acessar a Loja
+                     </button>
+                   )}
+                   <div className={`hero-online-badge ${tenant.isOnline ? 'online' : 'offline'}`}>
+                     <span className="pulse-dot"></span>
+                     {tenant.isOnline ? 'Aberto Agora' : 'Fechado no Momento'}
+                   </div>
+                 </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Client Content */}
+          <div className="status-summary-container fade-in">
+            <div className="status-summary-card serving">
+              <div className="status-info">
+                <span className="status-value">{servingCount}</span>
+                <span className="status-label">Em Atendimento</span>
+              </div>
+              <div className="status-icon-glow"></div>
+            </div>
+            <div className="status-summary-card waiting">
+              <div className="status-info">
+                <span className="status-value">{waitingCount}</span>
+                <span className="status-label">Na Espera</span>
+              </div>
+              <div className="status-icon-glow"></div>
+            </div>
+            <div className="status-summary-card total">
+              <div className="status-info">
+                <span className="status-value">{totalCount}</span>
+                <span className="status-label">Total Hoje</span>
+              </div>
+              <div className="status-icon-glow"></div>
+            </div>
+          </div>
+
+          <main className="main-content">
+            {/* Form Section */}
+            <section className="form-panel glass-panel">
+              {!tenant.isOnline ? (
+                <div style={{ textAlign: 'center', padding: '3rem 1rem' }}>
+                  <div style={{ width: '64px', height: '64px', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem' }}>
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
+                  </div>
+                  <h2 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>Loja Fechada</h2>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Volte em nosso horário de funcionamento!</p>
+                </div>
+              ) : amIInQueue ? (
+                <div className="active-presence-card fade-in">
+                  <h2 style={{ marginBottom: '1.5rem', textAlign: 'center' }}>Sua presença confirmada!</h2>
+                  <div className="my-status-monitor fade-in">
+                    <div className="monitor-glow"></div>
+                    <div className="monitor-content">
+                      <p className="monitor-label">Posição Atual</p>
+                      <div className="monitor-value">{queue.findIndex(item => item.id === amIInQueue?.id) + 1}º</div>
+                      <p className="monitor-subtext">Você é o próximo!</p>
+                    </div>
+                    <div className="monitor-footer">
+                      <div className="live-indicator"><span className="live-dot"></span>AO VIVO</div>
+                    </div>
+                  </div>
+
+                  {(() => {
+                    const waitingItems = queue.filter(q => q.status === 'waiting');
+                    const myWaitIndex = waitingItems.findIndex(q => q.id === amIInQueue?.id);
+                    
+                    // Mostrar se for o 1º ou 2º da fila de espera
+                    if (myWaitIndex >= 0 && myWaitIndex < 2) {
+                      if (amIInQueue?.isOnWay) {
+                        return (
+                          <div className="fade-in" style={{ marginTop: '1.5rem', padding: '16px', background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.2)', color: '#10b981', borderRadius: '16px', textAlign: 'center', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                            Profissional avisado que você está a caminho!
+                          </div>
+                        );
+                      } else {
+                        return (
+                          <div className="fade-in" style={{ marginTop: '1.5rem' }}>
+                            <button 
+                              onClick={() => handleConfirmOnWay(amIInQueue!.id)} 
+                              className="btn-submit" 
+                              disabled={loading}
+                              style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', background: '#3b82f6', color: '#fff' }}
+                            >
+                              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 22h14"></path><path d="m5 12 7-7 7 7"></path><path d="M12 15v7"></path></svg>
+                              Você está a caminho? Confirme presença
+                            </button>
+                          </div>
+                        );
+                      }
+                    }
+                    return null;
+                  })()}
+
+                  <div style={{ marginTop: '2rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <button onClick={() => window.open(`https://wa.me/${tenant.whatsapp?.replace(/\D/g, '')}`)} className="hero-cta-button" style={{ background: '#25D366' }}>Falar no WhatsApp</button>
+                    <button onClick={() => setShowLeaveModal(true)} className="btn-secondary">Sair da Fila</button>
+                  </div>
+                </div>
+              ) : (
+                <form onSubmit={handleJoinQueue} className="join-form">
+                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
+                    <div style={{ padding: '10px', background: 'rgba(var(--accent-primary-rgb), 0.1)', borderRadius: '12px', color: 'var(--accent-primary)' }}>
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><polyline points="16 11 18 13 22 9"></polyline></svg>
+                    </div>
+                    <div>
+                      <h2 style={{ fontSize: '1.4rem', color: 'var(--text-primary)' }}>{tenant.bookingType === 'appointment' ? 'Agendar Horário' : 'Entrar na Fila'}</h2>
+                    </div>
+                  </div>
+                  <div className="form-group">
+                    <label>Seu Nome</label>
+                    <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex: João" required />
+                  </div>
+                  <div className="form-group">
+                    <label>WhatsApp</label>
+                    <input type="tel" value={customerWhatsapp} onChange={handlePhoneChange} placeholder="(00) 90000-0000" required />
+                  </div>
+                  <div className="form-group">
+                    <label>Serviço</label>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '1rem' }}>
+                      {tenant.services.map(s => (
+                        <button key={s.id} type="button" onClick={() => setSelectedServiceId(s.id)} className={`service-selection-card ${selectedServiceId === s.id ? 'active' : ''}`} style={{ padding: '1rem', borderRadius: '12px', border: '1px solid #e2e8f0', background: selectedServiceId === s.id ? 'rgba(16,185,129,0.1)' : '#ffffff', color: 'var(--text-primary)' }}>
+                          {s.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <button type="submit" className="btn-submit" style={{ marginTop: '1rem' }} disabled={loading}>
+                    {loading ? 'Aguarde...' : 'Confirmar'}
+                  </button>
+                </form>
+              )}
+            </section>
+
+            {/* Queue Section */}
+            <section className="queue-panel">
+               <div className="queue-header">
+                <h2>Acompanhe a Fila</h2>
+              </div>
+              <div className="queue-list" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {queue.map((item, index) => (
+                  <div key={item.id} className={`queue-item glass-card ${item.status}`} style={{ padding: '1.25rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 800, opacity: 0.3 }}>{index + 1}º</div>
+                    <div style={{ flexGrow: 1 }}>
+                      <h4 style={{ color: 'var(--text-primary)' }}>{item.name}</h4>
+                      <span style={{ fontSize: '0.8rem', opacity: 0.6 }}>{item.serviceName}</span>
+                      {item.status === 'serving' && item.startedAt && <TimeElapsed startedAt={item.startedAt} />}
+                    </div>
+                    <span className={`status-badge ${item.status}`}>{item.status === 'serving' ? 'Atendendo' : 'Aguardando'}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </main>
+        </div>
+      )}
+
 
       {/* Confirmation Modal */}
       {showConfirmation && (
-        <div className="modal-overlay" style={{ zIndex: 1100 }}>
-          <div className="modal-content glass-panel fade-in" style={{ maxWidth: '450px' }}>
-            <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-              <div style={{ 
-                width: '64px', 
-                height: '64px', 
-                background: 'rgba(16, 185, 129, 0.1)', 
-                color: '#10b981', 
-                borderRadius: '50%', 
-                display: 'flex', 
-                alignItems: 'center', 
-                justifyContent: 'center',
-                margin: '0 auto 1.5rem'
-              }}>
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
-              </div>
-              <h3 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>Confirme sua Escolha</h3>
-              <p style={{ color: 'var(--text-secondary)' }}>Verifique os detalhes do seu atendimento</p>
+        <div className="modal-overlay" style={{ zIndex: 10000 }}>
+          <div className="modal-content glass-panel fade-in" style={{ maxWidth: '400px', textAlign: 'center' }}>
+            <div style={{ width: '64px', height: '64px', background: 'var(--success)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem' }}>
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
             </div>
+            <h3 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>Sucesso!</h3>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem' }}>Seu lugar na fila foi reservado com sucesso.</p>
+            <button onClick={() => setShowConfirmation(false)} className="btn-submit">Entendi</button>
+          </div>
+        </div>
+      )}
 
-            <div className="glass-card" style={{ padding: '1.5rem', marginBottom: '2rem', border: '1px solid rgba(255,255,255,0.05)' }}>
-              <div style={{ marginBottom: '1.25rem' }}>
-                <span style={{ display: 'block', fontSize: '0.75rem', color: '#a1a1aa', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.4rem' }}>Serviço Escolhido</span>
-                <span style={{ fontSize: '1.1rem', fontWeight: 600, color: '#fff' }}>
-                  {tenant.services.find(s => s.id === selectedServiceId)?.name}
-                </span>
-              </div>
-              {tenant.bookingType === 'appointment' && (
-                <div style={{ marginBottom: '1.25rem' }}>
-                  <span style={{ display: 'block', fontSize: '0.75rem', color: '#a1a1aa', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.4rem' }}>Data e Horário</span>
-                  <span style={{ fontSize: '1.1rem', fontWeight: 600, color: '#fff' }}>
-                    {selectedDate.split('-').reverse().join('/')} às {selectedTimeSlot}
-                  </span>
-                </div>
-              )}
-              <div>
-                <span style={{ display: 'block', fontSize: '0.75rem', color: '#a1a1aa', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.4rem' }}>Valor do Atendimento</span>
-                <span style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--accent-primary)' }}>
-                  {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(tenant.services.find(s => s.id === selectedServiceId)?.price || 0)}
-                </span>
-              </div>
+      {/* Leave Queue Confirmation Modal */}
+      {showLeaveModal && (
+        <div className="modal-overlay" style={{ zIndex: 10000 }}>
+          <div className="modal-content glass-panel fade-in" style={{ maxWidth: '400px', textAlign: 'center', padding: '2.5rem' }}>
+            <div style={{ width: '64px', height: '64px', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem', color: '#ef4444' }}>
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path><line x1="12" y1="2" x2="12" y2="12"></line></svg>
             </div>
-
-            <div style={{ display: 'flex', gap: '1rem' }}>
+            <h3 style={{ fontSize: '1.5rem', marginBottom: '0.75rem', color: 'var(--text-primary)' }}>Sair da Fila?</h3>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem', fontSize: '0.95rem', lineHeight: '1.5' }}>
+              Você perderá sua posição atual e precisará entrar novamente se mudar de ideia.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <button 
-                onClick={confirmJoinQueue} 
+                onClick={handleCancelMyPlace} 
                 className="btn-submit" 
-                style={{ flex: 2, padding: '16px', borderRadius: '12px' }}
+                style={{ background: '#ef4444', color: '#fff', border: 'none' }}
               >
-                Sim, Confirmar
+                Sim, desejo sair
               </button>
               <button 
-                onClick={() => setShowConfirmation(false)} 
+                onClick={() => setShowLeaveModal(false)} 
                 className="btn-secondary" 
-                style={{ flex: 1, padding: '16px', borderRadius: '12px' }}
+                style={{ border: '1px solid rgba(0,0,0,0.1)', width: '100%' }}
               >
-                Voltar
+                Continuar na fila
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Header Section */}
-      <header className="header-container glass-panel">
-        <div className="brand-section">
-          <div className="logo-wrapper" style={{ overflow: 'hidden' }}>
-            {tenant.hasLogo && tenant.logoUrl ? (
-              <img 
-                src={tenant.logoUrl} 
-                alt={`${tenant.name} Logo`} 
-                style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }}
-              />
-            ) : (
-              <div 
-                style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                dangerouslySetInnerHTML={{ __html: prof.iconSvg.replace('width="28" height="28"', 'width="24" height="24"') }}
-              />
-            )}
-          </div>
-          <div className="brand-info">
-            <h1 style={{ fontSize: '1.8rem', fontWeight: 800 }}>{tenant.name}</h1>
-          </div>
-        </div>
-        <div className="header-stats-wrapper">
-          {isAuthenticated && (
-            <div className="queue-stats admin-stats">
-              <div className="stat-value">{completedCount}</div>
-              <div className="stat-label">Serviços Hoje</div>
-            </div>
-          )}
-          <div className="queue-stats">
-            <div className="stat-value">{queue.length}</div>
-            <div className="stat-label">Na Fila</div>
-          </div>
-        </div>
-      </header>
-
-      {/* Tab Switcher (only for authenticated barbers) */}
-      {isAuthenticated && (
-        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
-          <button
-            onClick={() => setActiveTab('queue')}
-            className={activeTab === 'queue' ? 'btn-submit' : 'btn-secondary'}
-            style={{ 
-              flex: 1, 
-              padding: '12px', 
-              fontSize: '0.9rem', 
-              width: 'auto',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '10px',
-              fontWeight: 600,
-              letterSpacing: '0.5px'
-            }}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><line x1="20" y1="4" x2="8.12" y2="15.88"></line><line x1="14.47" y1="14.48" x2="20" y2="20"></line><line x1="8.12" y1="8.12" x2="12" y2="12"></line></svg>
-            Fila de Atendimento
-          </button>
-          <button
-            onClick={() => setActiveTab('financial')}
-            className={activeTab === 'financial' ? 'btn-submit' : 'btn-secondary'}
-            style={{ 
-              flex: 1, 
-              padding: '12px', 
-              fontSize: '0.9rem', 
-              width: 'auto',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '10px',
-              fontWeight: 600,
-              letterSpacing: '0.5px'
-            }}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
-            Financeiro
-          </button>
-        </div>
-      )}
-
-      {activeTab === 'financial' && isAuthenticated ? (
-        <FinancialView tenantId={tenant.id} profession={tenant.profession} />
-      ) : (
-        <main className="main-content">
-        
-        {/* Left Side: Form */}
-        <section className="form-panel glass-panel">
-          {!tenant.isOnline && !isAuthenticated ? (
-            <div style={{ textAlign: 'center', padding: '3rem 1rem' }}>
-              <div style={{ 
-                width: '64px', 
-                height: '64px', 
-                background: 'rgba(239, 68, 68, 0.1)', 
-                borderRadius: '50%', 
-                display: 'flex', 
-                alignItems: 'center', 
-                justifyContent: 'center',
-                margin: '0 auto 1.5rem',
-                color: '#ef4444'
-              }}>
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+      {/* Store Modal */}
+      {showStoreModal && (
+        <div className="modal-overlay" style={{ zIndex: 10000 }} onClick={() => setShowStoreModal(false)}>
+          <div className="modal-content glass-panel fade-in" onClick={e => e.stopPropagation()} style={{ maxWidth: '680px', width: '92%', background: '#ffffff', padding: '2rem', borderRadius: '24px', border: '1px solid rgba(0,0,0,0.08)', maxHeight: '88vh', overflowY: 'auto' }}>
+            
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <div>
+                <h3 style={{ fontSize: '1.4rem', fontWeight: 900, color: '#0f172a', margin: 0 }}>🛍️ Loja de {tenant.name}</h3>
+                <p style={{ fontSize: '0.85rem', color: '#64748b', margin: '4px 0 0' }}>Produtos usados e recomendados — clique para pedir via WhatsApp</p>
               </div>
-              <h2 style={{ marginBottom: '1rem', color: '#fff' }}>Estabelecimento Offline</h2>
-              <p style={{ color: '#a1a1aa', fontSize: '0.95rem', lineHeight: '1.6' }}>
-                No momento o(a) {prof.professional.toLowerCase()} não está aceitando novos clientes na fila. Por favor, tente novamente mais tarde.
-              </p>
-            </div>
-          ) : localStorage.getItem(`suavez_in_queue_${tenant.id}`) && !isAuthenticated ? (
-            <div style={{ textAlign: 'center', padding: '2rem 0' }}>
-              <div style={{ 
-                width: '60px', 
-                height: '60px', 
-                background: 'rgba(16, 185, 129, 0.1)', 
-                borderRadius: '50%', 
-                display: 'flex', 
-                alignItems: 'center', 
-                justifyContent: 'center',
-                margin: '0 auto 1.5rem',
-                color: 'var(--success)'
-              }}>
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
-              </div>
-              <h2 style={{ marginBottom: '1rem' }}>Sua presença está confirmada!</h2>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', lineHeight: '1.6' }}>
-                Você já está na fila. Agora é só aguardar o(a) {prof.professional.toLowerCase()} chamar pelo painel ou pelo WhatsApp.
-              </p>
-              
-              <div style={{ marginTop: '2rem', padding: '1.5rem', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '12px', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
-                <p style={{ color: '#fff', fontSize: '0.9rem', marginBottom: '1rem', fontWeight: 500 }}>
-                  🔔 Quer ser avisado quando chegar sua vez?
-                </p>
-                <button 
-                  onClick={() => requestNotificationPermission()}
-                  style={{ 
-                    background: '#3b82f6', 
-                    color: '#fff', 
-                    border: 'none', 
-                    padding: '10px 20px', 
-                    borderRadius: '8px', 
-                    fontWeight: 600, 
-                    cursor: 'pointer',
-                    boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)'
-                  }}
-                >
-                  Ativar Notificações
-                </button>
-              </div>
-              <button 
-                onClick={() => {
-                  if(confirm("Deseja entrar novamente com outro nome?")) {
-                    localStorage.removeItem(`suavez_in_queue_${tenant.id}`);
-                    window.location.reload();
-                  }
-                }}
-                style={{ 
-                  marginTop: '2rem', 
-                  background: 'none', 
-                  border: 'none', 
-                  color: 'var(--text-secondary)', 
-                  textDecoration: 'underline', 
-                  cursor: 'pointer',
-                  fontSize: '0.8rem'
-                }}
-              >
-                Entrar com outro perfil
+              <button onClick={() => setShowStoreModal(false)} style={{ background: 'transparent', border: 'none', color: '#a1a1aa', cursor: 'pointer', padding: '4px' }}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
               </button>
             </div>
-          ) : (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '2rem' }}>
-                <h2 style={{ margin: 0 }}>{prof.joinTitle}</h2>
-              </div>
-              <form onSubmit={handleJoinQueue}>
-                <div className="form-group">
-                  <label htmlFor="name">Seu Nome</label>
-                  <input 
-                    type="text" 
-                    id="name" 
-                    placeholder="Ex: Pedro Nascimento" 
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    required
-                  />
-                </div>
 
-                <div className="form-group">
-                  <label htmlFor="whatsapp">Seu WhatsApp</label>
-                  <input 
-                    type="tel" 
-                    id="whatsapp" 
-                    placeholder="(00) 00000-0000" 
-                    value={customerWhatsapp}
-                    onChange={handlePhoneChange}
-                    required
-                  />
-                </div>
-                
-                <div className="form-group">
-                  <label htmlFor="service">Serviço Desejado</label>
-                  <select 
-                    id="service" 
-                    value={selectedServiceId}
-                    onChange={(e) => {
-                      setSelectedServiceId(e.target.value);
-                      setSelectedTimeSlot('');
-                    }}
-                  >
-                    {tenant.services.map(s => (
-                      <option key={s.id} value={s.id}>
-                        {s.name} — R$ {s.price.toFixed(2).replace('.', ',')} {s.duration && tenant.bookingType === 'appointment' ? `(${s.duration} min)` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+            <div style={{ width: '100%', height: '2px', background: 'linear-gradient(90deg, #10b981, #0f172a)', borderRadius: '2px', marginBottom: '1.5rem' }}></div>
 
-                {tenant.bookingType === 'appointment' && (
-                  <div style={{ background: 'rgba(255,255,255,0.02)', padding: '1.5rem', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)', marginBottom: '1.5rem' }}>
-                    <div className="form-group" style={{ marginBottom: '1rem' }}>
-                      <label htmlFor="date">Data do Agendamento</label>
-                      <input 
-                        type="date" 
-                        id="date" 
-                        value={selectedDate}
-                        onChange={(e) => {
-                          setSelectedDate(e.target.value);
-                          setSelectedTimeSlot('');
-                        }}
-                        min={new Date().toISOString().split('T')[0]}
-                        required
-                        style={{ background: 'rgba(0,0,0,0.2)' }}
-                      />
-                    </div>
-                    
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label>Horários Disponíveis</label>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '8px', marginTop: '0.5rem' }}>
-                        {getAvailableSlots().length === 0 ? (
-                          <div style={{ gridColumn: '1 / -1', fontSize: '0.9rem', color: 'var(--text-secondary)', fontStyle: 'italic', padding: '0.5rem 0' }}>
-                            Nenhum horário disponível para esta data.
-                          </div>
-                        ) : (
-                          getAvailableSlots().map(slot => (
-                            <button
-                              key={slot}
-                              type="button"
-                              onClick={() => setSelectedTimeSlot(slot)}
-                              style={{
-                                padding: '8px 4px',
-                                borderRadius: '6px',
-                                fontSize: '0.9rem',
-                                fontWeight: 600,
-                                border: selectedTimeSlot === slot ? '1px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.1)',
-                                background: selectedTimeSlot === slot ? 'rgba(var(--accent-primary-rgb, 234, 179, 8), 0.15)' : 'rgba(255,255,255,0.03)',
-                                color: selectedTimeSlot === slot ? 'var(--accent-primary)' : '#fff',
-                                cursor: 'pointer',
-                                transition: 'all 0.2s'
-                              }}
-                            >
-                              {slot}
-                            </button>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-                
-                <button type="submit" className="btn-submit" disabled={loading}>
-                  {loading ? 'Processando...' : (tenant.bookingType === 'appointment' ? 'Agendar Horário' : 'Confirmar Presença')}
-                </button>
-                
-                {tenant.whatsapp && (
-                  <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
-                    <a 
-                      href={`https://wa.me/${tenant.whatsapp.replace(/\D/g, '')}?text=Olá,%20acabei%20de%20entrar%20na%20fila!`} 
-                      target="_blank" rel="noreferrer"
-                      style={{ color: 'var(--success)', fontSize: '0.9rem', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '8px' }}
-                    >
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
-                      Chamar no WhatsApp
-                    </a>
-                  </div>
-                )}
-              </form>
-            </>
-          )}
-        </section>
+            {/* Product grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1rem' }}>
+              {products.map(p => {
+                const waNumber = (tenant.whatsapp || '').replace(/\D/g, '');
+                const waMsg = encodeURIComponent(`Olá ${tenant.name}! Vi sua loja e tenho interesse no produto: *${p.name}* (R$ ${p.price.toFixed(2).replace('.',',')}). Poderia me dar mais informações?`);
+                const waLink = `https://wa.me/${waNumber}?text=${waMsg}`;
 
-        {/* Right Side: Queue List */}
-        <section className="queue-panel">
-          <div className="queue-header">
-            <h2>
-              {tenant.bookingType === 'appointment' ? 'Agendamentos' : prof.queueTitle} 
-              {isAuthenticated && <span className="admin-tag" style={{ background: 'var(--accent-primary)', color: '#111' }}>{prof.professional} Logado(a)</span>}
-            </h2>
-          </div>
-          
-          {tenant.bookingType === 'appointment' && isAuthenticated && (
-            <div style={{ marginBottom: '1.5rem', background: 'rgba(255,255,255,0.02)', padding: '1rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
-              <label style={{ display: 'block', fontSize: '0.8rem', color: '#a1a1aa', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.5rem' }}>Visualizando Agendamentos do Dia:</label>
-              <input 
-                type="date" 
-                value={selectedDate}
-                onChange={(e) => {
-                  setSelectedDate(e.target.value);
-                  setSelectedTimeSlot('');
-                }}
-                style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', padding: '8px 12px', borderRadius: '6px', color: '#fff', width: '100%' }}
-              />
-            </div>
-          )}
-
-          <div className="queue-list">
-            {(tenant.bookingType === 'appointment' ? queue.filter(q => q.appointmentTime?.startsWith(selectedDate)) : queue).length === 0 ? (
-              <div className="empty-state glass-panel fade-in">
-                <div className="empty-state-icon">
-                  <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
-                    <line x1="16" y1="2" x2="16" y2="6"></line>
-                    <line x1="8" y1="2" x2="8" y2="6"></line>
-                    <line x1="3" y1="10" x2="21" y2="10"></line>
-                  </svg>
-                </div>
-                <h3>{tenant.bookingType === 'appointment' ? 'Sem agendamentos' : 'A fila está livre'}</h3>
-                <p>{tenant.bookingType === 'appointment' ? 'Nenhum horário marcado para este dia.' : 'Nenhum cliente aguardando momento.'}</p>
-              </div>
-            ) : (
-              (tenant.bookingType === 'appointment' ? queue.filter(q => q.appointmentTime?.startsWith(selectedDate)).sort((a,b) => (a.appointmentTime || '').localeCompare(b.appointmentTime || '')) : queue).map((item, index) => (
-                <div 
-                  key={item.id} 
-                  className={`queue-item glass-card fade-in ${item.status}`}
-                  style={{ animationDelay: `${index * 0.1}s` }}
-                >
-                  <div className="queue-position" style={tenant.bookingType === 'appointment' ? { width: '60px', height: '60px', borderRadius: '12px', fontSize: '1rem', display: 'flex', flexDirection: 'column', gap: '2px', lineHeight: 1 } : {}}>
-                    {tenant.bookingType === 'appointment' ? (
-                      <>
-                        <span style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.6)' }}>Horário</span>
-                        <span style={{ fontWeight: 800 }}>{item.appointmentTime?.split('T')[1]?.substring(0, 5)}</span>
-                      </>
-                    ) : `${index + 1}º`}
-                  </div>
-                  
-                    <div className="queue-item-info">
-                      <h3 style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        {item.name}
-                        <span style={{ fontSize: '1rem', color: 'var(--success)' }}>R$ {item.price.toFixed(2).replace('.', ',')}</span>
-                      </h3>
-                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        <div className="queue-service">{item.serviceName}</div>
-                        {item.whatsapp && (
-                          <div className="queue-service" style={{ color: 'var(--success)', borderColor: 'color-mix(in srgb, var(--success) 30%, transparent)' }}>
-                            📱 {item.whatsapp}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  
-                  <div className="queue-meta" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.2rem' }}>
-                    <div className={`status-badge ${item.status}`}>
-                      {item.status === 'serving' ? 'Em Atendimento' : (tenant.bookingType === 'appointment' ? 'Agendado' : 'Aguardando')}
-                    </div>
-                    {tenant.bookingType !== 'appointment' && (
-                      <div className="queue-time">
-                        🕒 {formatTimeISO(item.joinedAt)}
+                return (
+                  <div key={p.id} style={{ border: '1px solid #e2e8f0', borderRadius: '18px', overflow: 'hidden', background: '#fff', boxShadow: '0 2px 12px rgba(0,0,0,0.06)', display: 'flex', flexDirection: 'column' }}>
+                    {p.imageUrl ? (
+                      <img src={p.imageUrl} alt={p.name} style={{ width: '100%', height: '145px', objectFit: 'cover' }} />
+                    ) : (
+                      <div style={{ width: '100%', height: '145px', background: 'linear-gradient(135deg, #f1f5f9, #e2e8f0)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path><line x1="3" y1="6" x2="21" y2="6"></line><path d="M16 10a4 4 0 0 1-8 0"></path></svg>
                       </div>
                     )}
-                    {item.status === 'waiting' && isAuthenticated && index === queue.findIndex(i => i.status === 'waiting') && tenant.bookingType !== 'appointment' && (
-                       <button 
-                         className="btn-complete"
-                         style={{ background: 'var(--accent-primary)', color: '#111' }}
-                         onClick={() => handleStartService(item.id)}
-                       >
-                         ▶ Iniciar
-                       </button>
-                    )}
-                    {item.status === 'ready' && isAuthenticated && tenant.bookingType === 'appointment' && (
-                       <button 
-                         className="btn-complete"
-                         style={{ background: 'var(--accent-primary)', color: '#111' }}
-                         onClick={() => handleStartService(item.id)}
-                       >
-                         ▶ Iniciar
-                       </button>
-                    )}
-                    {item.status === 'serving' && isAuthenticated && (
-                       <button 
-                         className="btn-complete"
-                         onClick={() => handleCompleteService(item.id)}
-                       >
-                         ✓ Finalizar
-                       </button>
-                    )}
-                    {isAuthenticated && (
-                      <button
-                        onClick={() => handleRemoveFromQueue(item.id)}
+                    <div style={{ padding: '0.875rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', flexGrow: 1 }}>
+                      <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.95rem', lineHeight: 1.3 }}>{p.name}</div>
+                      <div style={{ fontWeight: 900, color: '#10b981', fontSize: '1.15rem' }}>R$ {p.price.toFixed(2).replace('.',',')}</div>
+                      <a
+                        href={waLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
                         style={{
-                          marginTop: '0.25rem',
-                          padding: '4px 10px',
-                          fontSize: '0.75rem',
-                          background: 'rgba(239,68,68,0.1)',
-                          color: 'var(--danger)',
-                          border: '1px solid rgba(239,68,68,0.25)',
-                          borderRadius: 'var(--border-radius-sm)',
-                          cursor: 'pointer',
-                          transition: 'all var(--transition-fast)'
+                          marginTop: 'auto',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '6px',
+                          padding: '9px 12px',
+                          background: '#25d366',
+                          color: '#fff',
+                          borderRadius: '10px',
+                          fontWeight: 700,
+                          fontSize: '0.82rem',
+                          textDecoration: 'none',
+                          transition: 'opacity 0.2s'
                         }}
-                        onMouseOver={e => (e.currentTarget.style.background = 'var(--danger)', e.currentTarget.style.color = '#fff')}
-                        onMouseOut={e => (e.currentTarget.style.background = 'rgba(239,68,68,0.1)', e.currentTarget.style.color = 'var(--danger)')}
+                        onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
+                        onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
                       >
-                        ✕ Remover da Fila
-                      </button>
-                    )}
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+                        Quero este produto
+                      </a>
+                    </div>
                   </div>
-                </div>
-              ))
-            )}
+                );
+              })}
+            </div>
           </div>
-        </section>
-      </main>
+        </div>
       )}
-    </div>
+
+    </>
   );
 }
-

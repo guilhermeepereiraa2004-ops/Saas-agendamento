@@ -52,6 +52,36 @@ export const PROFESSION_CONFIG: Record<Profession, ProfessionConfig> = {
     iconSvg: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9.06 11.9l8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"></path><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1 1 2.67 1.39 4 1.02 1.66-.51 3.42-1.64 4-3.04 0-1.67-1.35-3.02-3-3.02z"></path></svg>`,
     defaultService: 'Corte Feminino',
   },
+  lash: {
+    label: 'Lash Design',
+    professional: 'Lash Designer',
+    loginLabel: 'Acesso Restrito',
+    queueTitle: 'Fila de Atendimento',
+    joinTitle: 'Entrar na Fila',
+    icon: null,
+    iconSvg: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>`,
+    defaultService: 'Extensão de Cílios',
+  },
+  makeup: {
+    label: 'Maquiadora',
+    professional: 'Maquiadora',
+    loginLabel: 'Acesso Restrito',
+    queueTitle: 'Fila de Atendimento',
+    joinTitle: 'Entrar na Fila',
+    icon: null,
+    iconSvg: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path><path d="m14 10 6-6"></path><path d="M9 15v6l-2.5-2.5L4 21l-2-2 2.5-2.5L2 14v-5c0-1.5 1.5-3 3-3h1"></path></svg>`,
+    defaultService: 'Maquiagem Social',
+  },
+  esthetician: {
+    label: 'Esteticista',
+    professional: 'Esteticista',
+    loginLabel: 'Acesso Restrito',
+    queueTitle: 'Fila de Atendimento',
+    joinTitle: 'Entrar na Fila',
+    icon: null,
+    iconSvg: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg>`,
+    defaultService: 'Limpeza de Pele',
+  },
 };
 
 export function getProfessionConfig(profession?: Profession): ProfessionConfig {
