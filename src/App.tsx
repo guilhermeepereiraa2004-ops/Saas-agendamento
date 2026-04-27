@@ -172,7 +172,7 @@ function App() {
     // Landing Page Redesign
     return (
       <div className="home-container fade-in" style={{ 
-        background: 'var(--bg-base)',
+        background: '#000',
         color: '#fff',
         overflowX: 'hidden'
       }}>
@@ -186,10 +186,10 @@ function App() {
           margin: '0 auto',
           position: 'sticky',
           top: 0,
-          background: 'rgba(11, 14, 20, 0.8)',
+          background: 'rgba(0, 0, 0, 0.9)',
           backdropFilter: 'blur(15px)',
           zIndex: 100,
-          borderBottom: '1px solid rgba(255,255,255,0.05)'
+          borderBottom: '1px solid rgba(255,255,255,0.08)'
         }}>
            <div style={{ display: 'flex', alignItems: 'center', gap: 'clamp(8px, 2vw, 12px)' }}>
              <div style={{ width: 'clamp(30px, 8vw, 36px)', height: 'clamp(30px, 8vw, 36px)', background: 'var(--accent-primary)', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -383,11 +383,11 @@ function App() {
                <p style={{ fontSize: '1.1rem', color: 'var(--text-secondary)', lineHeight: '1.7', marginBottom: '2rem' }}>
                  Barbearias de elite não gerenciam cadeiras, gerenciam experiências. O "Sua Vez" foi desenhado para remover o estresse da porta e permitir que seu talento brilhe sem interrupções.
                </p>
-                <div className="glass-panel" style={{ padding: 'clamp(1.5rem, 5vw, 2.5rem)', borderLeft: '4px solid var(--accent-primary)' }}>
-                 <p style={{ fontStyle: 'italic', color: '#fff', fontSize: 'clamp(0.95rem, 3vw, 1.1rem)', lineHeight: '1.7' }}>
+                <div className="glass-panel" style={{ padding: 'clamp(1.5rem, 5vw, 2.5rem)', borderLeft: '4px solid var(--accent-primary)', background: 'rgba(255, 255, 255, 0.9)' }}>
+                 <p style={{ fontStyle: 'italic', color: '#000', fontSize: 'clamp(0.95rem, 3vw, 1.1rem)', lineHeight: '1.7' }}>
                    "A melhor ferramenta para o meu negócio. O faturamento aumentou porque nenhum cliente desiste de esperar ao ver a fila organizada."
                  </p>
-                 <footer style={{ marginTop: '1rem', fontWeight: 600, color: 'var(--accent-primary)', fontSize: '0.9rem' }}>— Gestão Master Multi-SaaS</footer>
+                 <footer style={{ marginTop: '1rem', fontWeight: 700, color: '#000', fontSize: '0.9rem', opacity: 0.8 }}>— Gestão Master Multi-SaaS</footer>
                </div>
             </div>
           </div>
