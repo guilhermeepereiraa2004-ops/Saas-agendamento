@@ -149,7 +149,8 @@ export const sendPushNotification = async (pushId: string, title: string, messag
   }
 
   try {
-    await fetch('https://onesignal.com/api/v1/notifications', {
+    console.log('[DEBUG] Enviando Push para:', pushId);
+    const response = await fetch('https://onesignal.com/api/v1/notifications', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json; charset=utf-8',
@@ -162,6 +163,13 @@ export const sendPushNotification = async (pushId: string, title: string, messag
         headings: { en: title, pt: title }
       })
     });
+    
+    const result = await response.json();
+    console.log('[DEBUG] Resposta do OneSignal:', result);
+    
+    if (!response.ok) {
+      console.error('[DEBUG] Falha no OneSignal API:', result);
+    }
   } catch (error) {
     console.error('OneSignal: Erro ao disparar notificação via API:', error);
   }
