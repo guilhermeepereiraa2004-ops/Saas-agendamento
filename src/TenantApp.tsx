@@ -30,59 +30,60 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const prevQueueRef = useRef<QueueItem[]>([]);
 
   // INITIAL LOAD + REALTIME
+  const mapQueueItem = (q: any): QueueItem => ({
+    id: q.id,
+    name: q.name,
+    whatsapp: q.whatsapp,
+    serviceId: q.service_id,
+    serviceName: q.service_name,
+    price: parseFloat(q.price),
+    status: q.status,
+    joinedAt: q.joined_at,
+    appointmentTime: q.appointment_time,
+    isOnWay: q.is_on_way,
+    pushId: q.push_id,
+    startedAt: q.started_at
+  });
+
+  const fetchData = async () => {
+    const { data: queueData } = await supabase
+      .from('queue_items')
+      .select('*')
+      .eq('tenant_id', tenant.id)
+      .order('joined_at', { ascending: true });
+
+    if (queueData) setQueue(queueData.map(mapQueueItem));
+
+    const { data: tenantData } = await supabase
+      .from('tenants')
+      .select('*')
+      .eq('id', tenant.id)
+      .single();
+
+    if (tenantData) {
+      setCompletedCount(tenantData.completed_today || 0);
+      setTenant(prev => ({
+        ...prev,
+        profession: tenantData.profession,
+        name: tenantData.name,
+        primaryColor: tenantData.primary_color,
+        hasLogo: tenantData.has_logo,
+        logoUrl: tenantData.logo_url,
+        isOnline: tenantData.is_online ?? true,
+        subscriptionStatus: tenantData.subscription_status,
+        nextPaymentAt: tenantData.next_payment_at ? tenantData.next_payment_at.split('T')[0] : undefined,
+      }));
+    }
+
+    const { data: settingsData } = await supabase.from('platform_settings').select('pix_key, pix_name').limit(1).single();
+    if (settingsData) {
+      if (settingsData.pix_key) setAdminPixKey(settingsData.pix_key);
+      if (settingsData.pix_name) setAdminPixName(settingsData.pix_name);
+    }
+  };
+
+  // INITIAL LOAD + REALTIME
   useEffect(() => {
-    const mapQueueItem = (q: any): QueueItem => ({
-      id: q.id,
-      name: q.name,
-      whatsapp: q.whatsapp,
-      serviceId: q.service_id,
-      serviceName: q.service_name,
-      price: parseFloat(q.price),
-      status: q.status,
-      joinedAt: q.joined_at,
-      appointmentTime: q.appointment_time,
-      isOnWay: q.is_on_way,
-      pushId: q.push_id,
-      startedAt: q.started_at
-    });
-
-    const fetchData = async () => {
-      const { data: queueData } = await supabase
-        .from('queue_items')
-        .select('*')
-        .eq('tenant_id', tenant.id)
-        .order('joined_at', { ascending: true });
-
-      if (queueData) setQueue(queueData.map(mapQueueItem));
-
-      const { data: tenantData } = await supabase
-        .from('tenants')
-        .select('*')
-        .eq('id', tenant.id)
-        .single();
-
-      if (tenantData) {
-        setCompletedCount(tenantData.completed_today || 0);
-        setTenant(prev => ({
-          ...prev,
-          profession: tenantData.profession,
-          name: tenantData.name,
-          primaryColor: tenantData.primary_color,
-          hasLogo: tenantData.has_logo,
-          logoUrl: tenantData.logo_url,
-          isOnline: tenantData.is_online ?? true,
-          subscriptionStatus: tenantData.subscription_status,
-          nextPaymentAt: tenantData.next_payment_at ? tenantData.next_payment_at.split('T')[0] : undefined,
-        }));
-      }
-
-      const { data: settingsData } = await supabase.from('platform_settings').select('pix_key, pix_name').limit(1).single();
-      if (settingsData) {
-        if (settingsData.pix_key) setAdminPixKey(settingsData.pix_key);
-        if (settingsData.pix_name) setAdminPixName(settingsData.pix_name);
-      }
-    };
-
     fetchData();
 
     // Canal separado para queue_items
@@ -311,14 +312,16 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   }, [queue, myQueueItemId]);
 
   // Trigger confirmation modal
-  const handleJoinQueue = (e: React.FormEvent) => {
+  const handleJoinQueue = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !selectedServiceId) return;
     if (tenant.bookingType === 'appointment' && !selectedTimeSlot) {
       showToast('Por favor, selecione um horário!', 'warning');
       return;
     }
-    setShowConfirmation(true);
+    
+    // Executa a entrada na fila
+    await confirmJoinQueue();
   };
 
   // Status counts for the summary bar
@@ -328,34 +331,38 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
   // Handle actual adding to queue
   const confirmJoinQueue = async () => {
+    console.log('[DEBUG] Iniciando confirmJoinQueue...');
     setShowConfirmation(false);
-    setLoading(true);
     const startTime = Date.now();
-
+    setLoading(true);
+    
     try {
-      // 1. Anti-spam check: check if this WhatsApp is already in the queue for this tenant
-      const { data: existing } = await supabase
-        .from('queue_items')
-        .select('id')
-        .eq('tenant_id', tenant.id)
-        .eq('whatsapp', customerWhatsapp.trim())
-        .in('status', ['waiting', 'serving'])
-        .maybeSingle();
-
-      if (existing && !import.meta.env.DEV) {
-        showToast('Você já está na fila deste estabelecimento!', 'warning');
-        setLoading(false);
-        return;
-      }
-
       const selectedSvc = tenant.services.find(s => s.id === selectedServiceId);
       if (!selectedSvc) {
+        console.error('[DEBUG] Serviço não encontrado:', selectedServiceId);
         setLoading(false);
         return;
       }
 
-      // Capture OneSignal ID if possible
-      const pushId = await getOneSignalId();
+      // Capture OneSignal ID if possible (non-blocking, PROD ONLY)
+      let pushId = null;
+      if (import.meta.env.PROD) {
+        try {
+          console.log('[DEBUG] Tentando capturar OneSignal ID...');
+          pushId = await getOneSignalId();
+          console.log('[DEBUG] OneSignal ID capturado:', pushId);
+        } catch (err) {
+          console.warn('[DEBUG] Falha ao capturar Push ID, continuando sem ele:', err);
+        }
+      } else {
+        console.log('[DEBUG] OneSignal ignorado em modo DEV.');
+      }
+
+      console.log('[DEBUG] Enviando para o Supabase...', {
+        tenant_id: tenant.id,
+        name: name.trim(),
+        whatsapp: customerWhatsapp.trim()
+      });
 
       const { data, error } = await supabase.from('queue_items').insert([{
         tenant_id: tenant.id,
@@ -364,28 +371,37 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         service_id: selectedSvc.id,
         service_name: selectedSvc.name,
         price: selectedSvc.price,
-        status: tenant.bookingType === 'appointment' ? 'ready' : 'waiting', // Appointments skip waiting to be 'served' by time
+        status: tenant.bookingType === 'appointment' ? 'ready' : 'waiting',
         appointment_time: tenant.bookingType === 'appointment' ? `${selectedDate}T${selectedTimeSlot}:00` : null,
         push_id: pushId
       }]).select();
 
-      if (!error && data) {
+      if (error) {
+        console.error('[DEBUG] Erro Supabase:', error);
+        showToast('Erro ao entrar na fila: ' + error.message, 'error');
+      } else if (data && data.length > 0) {
+        console.log('[DEBUG] Sucesso! Dados retornados:', data[0]);
         setName('');
         setCustomerWhatsapp('');
-        // Store in localStorage that THIS user is in the queue to show a special message
         localStorage.setItem(`suavez_in_queue_${tenant.id}`, 'true');
         localStorage.setItem(`suavez_customer_id_${tenant.id}`, data[0].id);
         setMyQueueItemId(data[0].id);
+        
+        // Forçar atualização manual da fila caso o realtime falhe
+        fetchData();
+        
         showToast('Presença confirmada com sucesso!', 'success');
-      } else {
-        showToast('Erro ao entrar na fila: ' + error.message, 'error');
       }
+    } catch (err: any) {
+      console.error('[DEBUG] Erro inesperado no fluxo:', err);
+      showToast('Ocorreu um erro inesperado: ' + err.message, 'error');
     } finally {
       const elapsedTime = Date.now() - startTime;
       if (elapsedTime < 1200) {
         await new Promise(resolve => setTimeout(resolve, 1200 - elapsedTime));
       }
       setLoading(false);
+      console.log('[DEBUG] Fim do processo confirmJoinQueue');
     }
   };
 
@@ -419,14 +435,20 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     // Find client to get push_id
     const client = queue.find(q => q.id === id);
     
-    const { error } = await supabase.from('queue_items').update({ status: 'serving', started_at: new Date().toISOString() }).eq('id', id);
+    const { error } = await supabase.from('queue_items').update({ 
+      status: 'serving', 
+      started_at: new Date().toISOString(),
+      is_on_way: false
+    }).eq('id', id);
     
-    if (!error && client?.pushId) {
+    if (!error && client?.pushId && import.meta.env.PROD) {
       sendPushNotification(
         client.pushId,
         'Sua vez chegou! ✂️',
         `Olá ${client.name}, o profissional já está te aguardando. Pode vir!`
       );
+    } else if (!import.meta.env.PROD) {
+      console.log('[DEBUG] Notificação suprimida (Modo DEV)');
     }
   };
 

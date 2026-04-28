@@ -14,7 +14,20 @@ let isInitialized = false;
 export function OneSignalInitializer() {
   useEffect(() => {
     const appId = import.meta.env.VITE_ONESIGNAL_APP_ID;
+    const isDev = import.meta.env.DEV;
     
+    if (isDev) {
+      console.log('OneSignal: Desativado em modo de desenvolvimento.');
+      return;
+    }
+
+    // Se o OneSignal falhar por qualquer motivo externo, não queremos que o app trave
+    window.addEventListener('error', (e) => {
+      if (e.message.includes('OneSignal') || e.filename?.includes('OneSignal')) {
+        console.warn('OneSignal: Falha detectada no script externo. Continuando...');
+      }
+    }, true);
+
     if (!appId || appId === 'seu_app_id_do_onesignal_aqui') {
       console.warn('OneSignal: VITE_ONESIGNAL_APP_ID não configurado corretamente.');
       initializationError = 'AppID não configurado';
@@ -106,9 +119,28 @@ export const requestNotificationPermission = async () => {
 // Helper para obter o ID de inscrição atual (OneSignal V5)
 export const getOneSignalId = async (): Promise<string | null> => {
   return new Promise((resolve) => {
+    // Timeout de segurança reduzido para 800ms
+    const timeout = setTimeout(() => {
+      console.warn('OneSignal: Timeout ou SDK indisponível.');
+      resolve(null);
+    }, 800);
+
+    if (!window.OneSignalDeferred && !window.OneSignal) {
+      clearTimeout(timeout);
+      resolve(null);
+      return;
+    }
+
     window.OneSignalDeferred = window.OneSignalDeferred || [];
     window.OneSignalDeferred.push(async (OneSignal: any) => {
-      resolve(OneSignal.User.PushSubscription.id || null);
+      clearTimeout(timeout);
+      try {
+        const id = OneSignal.User.PushSubscription.id;
+        resolve(id || null);
+      } catch (e) {
+        console.error('OneSignal: Erro ao ler ID:', e);
+        resolve(null);
+      }
     });
   });
 };
