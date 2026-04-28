@@ -320,6 +320,11 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       return;
     }
     
+    // Pedir permissão de notificações se for produção
+    if (import.meta.env.PROD) {
+      requestNotificationPermission();
+    }
+    
     // Executa a entrada na fila
     await confirmJoinQueue();
   };
