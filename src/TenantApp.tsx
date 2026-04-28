@@ -1366,20 +1366,39 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                   {(import.meta.env.PROD && !notifsEnabled) ? (
                     <div style={{ marginTop: '1.5rem', padding: '1.5rem', background: 'rgba(239, 68, 68, 0.05)', borderRadius: '16px', border: '1px dashed #ef4444', textAlign: 'center' }}>
                       <p style={{ fontSize: '0.9rem', color: '#ef4444', marginBottom: '1rem', fontWeight: 600 }}>
-                        ⚠️ Notificações Desativadas
+                        ⚠️ Notificações Necessárias
                       </p>
-                      <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
-                        Para entrar na fila e receber o aviso de que sua vez chegou, você precisa ativar as notificações.
-                      </p>
-                      <button 
-                        type="button" 
-                        onClick={() => requestNotificationPermission()}
-                        className="btn-submit" 
-                        style={{ background: '#0f172a', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}
-                      >
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
-                        Ativar Notificações Agora
-                      </button>
+                      
+                      {Notification.permission === 'denied' ? (
+                        <>
+                          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+                            Você **bloqueou** as notificações. Para entrar na fila:
+                          </p>
+                          <ol style={{ fontSize: '0.8rem', color: 'var(--text-primary)', textAlign: 'left', marginBottom: '1.5rem', paddingLeft: '20px' }}>
+                            <li>Clique no ícone de 🔒 (Cadeado) na barra de endereços lá em cima.</li>
+                            <li>Ative a chave de <b>Notificações</b>.</li>
+                            <li>Recarregue a página.</li>
+                          </ol>
+                        </>
+                      ) : (
+                        <>
+                          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
+                            Para entrar na fila e receber o aviso de que sua vez chegou, você precisa ativar as notificações abaixo.
+                          </p>
+                          <button 
+                            type="button" 
+                            onClick={() => {
+                              console.log('Solicitando permissão...');
+                              requestNotificationPermission();
+                            }}
+                            className="btn-submit" 
+                            style={{ background: '#0f172a', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}
+                          >
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+                            Ativar Notificações Agora
+                          </button>
+                        </>
+                      )}
                     </div>
                   ) : (
                     <button type="submit" className="btn-submit" style={{ marginTop: '1rem' }} disabled={loading}>
