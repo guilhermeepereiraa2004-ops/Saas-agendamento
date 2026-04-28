@@ -257,6 +257,22 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     if (isAuthenticated) {
       fetchTasks();
       fetchProducts();
+
+      // CAPTURAR E SALVAR O PUSH ID DO ADMIN (Sempre que logado em PROD)
+      if (import.meta.env.PROD) {
+        const syncAdminPushId = async () => {
+          const pushId = await getOneSignalId();
+          if (pushId) {
+            console.log('[DEBUG] Sincronizando Admin Push ID:', pushId);
+            const { error } = await supabase.from('tenants').update({ admin_push_id: pushId }).eq('id', tenant.id);
+            if (error) console.error('[DEBUG] Erro ao salvar Admin Push ID:', error);
+          }
+        };
+        // Tenta capturar após 5s, 15s e 30s (garante captura mesmo em conexões lentas)
+        setTimeout(syncAdminPushId, 5000);
+        setTimeout(syncAdminPushId, 15000);
+        setTimeout(syncAdminPushId, 30000);
+      }
     }
   }, [isAuthenticated, tenant.id]);
 
@@ -412,7 +428,10 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
         // Notificar o PROFISSIONAL (se ele tiver um admin_push_id salvo)
         const { data: tenantData } = await supabase.from('tenants').select('admin_push_id').eq('id', tenant.id).single();
+        console.log('[DEBUG] Admin Push ID encontrado:', tenantData?.admin_push_id);
+        
         if (tenantData?.admin_push_id && import.meta.env.PROD) {
+          console.log('[DEBUG] Disparando notificação para o Admin...');
           sendPushNotification(
             tenantData.admin_push_id,
             'Novo Cliente na Fila! 👤',
@@ -551,17 +570,6 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       // Logar no OneSignal para receber notificações de admin
       loginOneSignal(`admin_${tenant.id}`);
       requestNotificationPermission();
-
-      // CAPTURAR E SALVAR O PUSH ID DO ADMIN
-      if (import.meta.env.PROD) {
-        setTimeout(async () => {
-          const adminPushId = await getOneSignalId();
-          if (adminPushId) {
-            console.log('Salvando Push ID do Admin:', adminPushId);
-            await supabase.from('tenants').update({ admin_push_id: adminPushId }).eq('id', tenant.id);
-          }
-        }, 3000); // Espera 3s para o OneSignal inicializar após o login
-      }
     } else {
       showToast('E-mail ou senha incorretos!', 'error');
     }
