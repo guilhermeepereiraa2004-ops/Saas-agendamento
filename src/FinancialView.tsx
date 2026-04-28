@@ -147,38 +147,38 @@ export default function FinancialView({ tenantId }: Props) {
       {/* Today's Summary */}
       <div className="admin-stats-row" style={{ display: 'grid', gap: '1.5rem', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
         <div className="admin-stat-card" style={{ position: 'relative', overflow: 'hidden' }}>
-          <div style={{ position: 'absolute', top: '-10px', right: '-10px', opacity: 0.05, color: '#10b981' }}>
+          <div style={{ position: 'absolute', top: '-10px', right: '-10px', opacity: 0.05, color: 'var(--success)' }}>
              <svg width="100" height="100" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--success)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
               Faturamento Hoje
             </div>
-            <div style={{ fontSize: '2.5rem', fontWeight: 900, color: '#0f172a' }}>
+            <div style={{ fontSize: '2.5rem', fontWeight: 900, color: 'var(--text-primary)' }}>
               {formatCurrency(todayTotal)}
             </div>
           </div>
         </div>
 
         <div className="admin-stat-card" style={{ position: 'relative', overflow: 'hidden' }}>
-          <div style={{ position: 'absolute', top: '-10px', right: '-10px', opacity: 0.05, color: '#ef4444' }}>
+          <div style={{ position: 'absolute', top: '-10px', right: '-10px', opacity: 0.05, color: 'var(--danger)' }}>
              <svg width="100" height="100" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6"></path></svg>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6"></path></svg>
               Saídas Hoje
             </div>
-            <div style={{ fontSize: '2.5rem', fontWeight: 900, color: '#ef4444' }}>
+            <div style={{ fontSize: '2.5rem', fontWeight: 900, color: 'var(--danger)' }}>
               {formatCurrency(todayExpenses)}
             </div>
           </div>
         </div>
 
-        <div className="admin-stat-card" style={{ position: 'relative', overflow: 'hidden', background: '#0f172a' }}>
+        <div className="admin-stat-card" style={{ position: 'relative', overflow: 'hidden', background: 'var(--text-primary)' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', color: 'var(--bg-surface-elevated)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>
               Saldo Líquido Total
             </div>
             <div style={{ fontSize: '2.5rem', fontWeight: 900, color: '#fff' }}>
@@ -192,8 +192,8 @@ export default function FinancialView({ tenantId }: Props) {
         {/* Monthly Breakdown */}
         <div className="admin-stat-card">
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '2rem' }}>
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
-            <h3 style={{ fontSize: '1rem', color: '#0f172a', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 700 }}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+            <h3 style={{ fontSize: '1rem', color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 700 }}>
               Histórico Mensal
             </h3>
           </div>
@@ -210,15 +210,15 @@ export default function FinancialView({ tenantId }: Props) {
                   justifyContent: 'space-between',
                   alignItems: 'center',
                   padding: '1rem',
-                  background: '#f8fafc',
+                  background: 'var(--bg-base)',
                   borderRadius: '12px',
-                  border: '1px solid #e2e8f0',
+                  border: '1px solid color-mix(in srgb, var(--accent-primary) 10%, #e2e8f0)',
                 }}>
                   <div>
-                    <div style={{ fontWeight: 700, color: '#0f172a' }}>{formatMonth(key)}</div>
+                    <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{formatMonth(key)}</div>
                     <div style={{ fontSize: '0.8rem', color: '#64748b' }}>{data.count} atendimentos</div>
                   </div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#10b981' }}>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--success)' }}>
                     {formatCurrency(data.total)}
                   </div>
                 </div>
@@ -230,8 +230,8 @@ export default function FinancialView({ tenantId }: Props) {
         {/* Expenses Section */}
         <div className="admin-stat-card">
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '2rem' }}>
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
-            <h3 style={{ fontSize: '1rem', color: '#0f172a', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 700 }}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+            <h3 style={{ fontSize: '1rem', color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 700 }}>
               Controle de Saídas
             </h3>
           </div>
@@ -251,7 +251,7 @@ export default function FinancialView({ tenantId }: Props) {
               onChange={e => setExpenseAmount(e.target.value)}
               style={{ flexGrow: 1 }}
             />
-            <button type="submit" className="btn-submit" style={{ width: 'auto', padding: '0 20px', background: '#ef4444', color: '#fff' }}>Lançar</button>
+            <button type="submit" className="btn-submit" style={{ width: 'auto', padding: '0 20px', background: 'var(--danger)', color: '#fff' }}>Lançar</button>
           </form>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -259,14 +259,14 @@ export default function FinancialView({ tenantId }: Props) {
               <p style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>Nenhuma saída registrada.</p>
             ) : (
               expenses.map(exp => (
-                <div key={exp.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', background: '#fef2f2', border: '1px solid #fee2e2', borderRadius: '12px' }}>
+                <div key={exp.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', background: 'color-mix(in srgb, var(--danger) 5%, var(--bg-surface))', border: '1px solid color-mix(in srgb, var(--danger) 15%, #fee2e2)', borderRadius: '12px' }}>
                   <div>
                     <div style={{ fontWeight: 600, color: '#991b1b' }}>{exp.description}</div>
                     <div style={{ fontSize: '0.75rem', color: '#b91c1c' }}>{new Date(exp.created_at).toLocaleDateString('pt-BR')}</div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                    <div style={{ fontWeight: 800, color: '#ef4444' }}>-{formatCurrency(exp.amount)}</div>
-                    <button onClick={() => handleDeleteExpense(exp.id)} style={{ background: 'transparent', color: '#ef4444', padding: '5px' }}>
+                    <div style={{ fontWeight: 800, color: 'var(--danger)' }}>-{formatCurrency(exp.amount)}</div>
+                    <button onClick={() => handleDeleteExpense(exp.id)} style={{ background: 'transparent', color: 'var(--danger)', padding: '5px' }}>
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                     </button>
                   </div>

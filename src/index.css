@@ -48,15 +48,15 @@ body {
 
 /* Glassmorphism utilities updated for light theme */
 .glass-panel {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 10px 40px -10px rgba(0,0,0,0.08);
+  background: var(--bg-surface);
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 15%, #e2e8f0);
+  box-shadow: 0 10px 40px -10px rgba(var(--accent-primary-rgb), 0.08), 0 1px 1px rgba(0,0,0,0.02);
   border-radius: var(--border-radius-lg);
 }
 
 .glass-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-surface);
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 10%, #e2e8f0);
   border-radius: var(--border-radius-md);
   transition: transform var(--transition-bounce), box-shadow var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
 }

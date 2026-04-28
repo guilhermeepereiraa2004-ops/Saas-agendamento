@@ -69,8 +69,16 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
           primaryColor: tenantData.primary_color,
           hasLogo: tenantData.has_logo,
           logoUrl: tenantData.logo_url,
-          isOnline: tenantData.is_online ?? true
+          isOnline: tenantData.is_online ?? true,
+          subscriptionStatus: tenantData.subscription_status,
+          nextPaymentAt: tenantData.next_payment_at ? tenantData.next_payment_at.split('T')[0] : undefined,
         }));
+      }
+
+      const { data: settingsData } = await supabase.from('platform_settings').select('pix_key, pix_name').limit(1).single();
+      if (settingsData) {
+        if (settingsData.pix_key) setAdminPixKey(settingsData.pix_key);
+        if (settingsData.pix_name) setAdminPixName(settingsData.pix_name);
       }
     };
 
@@ -120,6 +128,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
             isOnline: payload.new.is_online ?? prev.isOnline,
             name: payload.new.name ?? prev.name,
             primaryColor: payload.new.primary_color ?? prev.primaryColor,
+            subscriptionStatus: payload.new.subscription_status ?? prev.subscriptionStatus,
+            nextPaymentAt: payload.new.next_payment_at ? payload.new.next_payment_at.split('T')[0] : prev.nextPaymentAt,
           }));
         }
       )
@@ -141,6 +151,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
   // Handle service extraction since we now deal with objects
   const [name, setName] = useState('');
+  const [adminPixKey, setAdminPixKey] = useState('');
+  const [adminPixName, setAdminPixName] = useState('');
   const [customerWhatsapp, setCustomerWhatsapp] = useState('');
   const [selectedServiceId, setSelectedServiceId] = useState('');
   const [completedCount, setCompletedCount] = useState(0);
@@ -660,7 +672,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
             <div className="sidebar-header">
               <div className="sidebar-logo">
                 {tenant.hasLogo && tenant.logoUrl ? (
-                  <img src={tenant.logoUrl} alt="Logo" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  <img src={tenant.logoUrl} alt="Logo" className="sidebar-logo-img" />
                 ) : (
                   <div dangerouslySetInnerHTML={{ __html: (prof?.iconSvg || '').replace('width="28" height="28"', 'width="24" height="24"') }} />
                 )}
@@ -729,6 +741,61 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
           {/* MAIN CONTENT */}
           <main className="admin-main-content">
+            {/* Payment Alert Banner */}
+            {(tenant.subscriptionStatus === 'pending' || tenant.subscriptionStatus === 'overdue') && (
+              <div className="payment-alert-banner fade-in">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div className="alert-icon-pulse">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                  </div>
+                  <div>
+                    <strong style={{ display: 'block', fontSize: '0.95rem' }}>Atenção: Pagamento Pendente</strong>
+                    <p style={{ margin: '2px 0 0 0', fontSize: '0.85rem', opacity: 0.9 }}>
+                      {tenant.nextPaymentAt ? (
+                        <>Sua mensalidade venceu em <strong>{new Date(tenant.nextPaymentAt).toLocaleDateString('pt-BR')}</strong>.</>
+                      ) : (
+                        <>Sua mensalidade está pendente de pagamento.</>
+                      )}
+                      {" "}Realize o pagamento para evitar a suspensão dos serviços.
+                    </p>
+                    {adminPixKey && (
+                      <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        {adminPixName && (
+                          <div style={{ fontSize: '0.8rem', opacity: 0.9 }}>
+                            <span style={{ fontWeight: 600 }}>Favorecido:</span> {adminPixName}
+                          </div>
+                        )}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>Chave PIX:</span>
+                          <code style={{ background: 'rgba(0,0,0,0.2)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.8rem', letterSpacing: '0.5px' }}>
+                            {adminPixKey}
+                          </code>
+                          <button 
+                            onClick={() => {
+                              navigator.clipboard.writeText(adminPixKey);
+                              showToast('Chave PIX copiada!', 'success');
+                            }}
+                            style={{ background: 'transparent', border: 'none', color: 'white', cursor: 'pointer', padding: '4px' }}
+                            title="Copiar PIX"
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <a 
+                  href={`https://wa.me/5573981171609?text=Olá! Já realizei o pagamento da minha conta: ${tenant.name}. Segue o comprovante.`} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="btn-pay-now"
+                >
+                  Enviar Comprovante
+                </a>
+              </div>
+            )}
+
             <header className="admin-topbar">
               <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                 <button className="mobile-menu-btn" onClick={() => setIsMobileMenuOpen(true)}>
@@ -775,7 +842,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
             {isAdminAddModalOpen && (
                <div className="modal-overlay" style={{ zIndex: 10000, position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                 <div className="modal-content glass-panel fade-in" style={{ maxWidth: '500px', width: '90%', background: '#ffffff', color: 'var(--text-primary)', border: '1px solid rgba(0,0,0,0.1)', padding: '2rem', borderRadius: '20px' }}>
+                  <div className="modal-content glass-panel fade-in" style={{ maxWidth: '500px', width: '90%', background: 'var(--bg-surface)', color: 'var(--text-primary)', border: '1px solid color-mix(in srgb, var(--accent-primary) 20%, rgba(0,0,0,0.1))', padding: '2rem', borderRadius: '24px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
                       <h3 style={{ fontSize: '1.25rem', margin: 0 }}>Adicionar Cliente à Fila</h3>
                       <button onClick={() => setIsAdminAddModalOpen(false)} style={{ background: 'transparent', border: 'none', color: '#a1a1aa' }}>
@@ -872,7 +939,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                         <p style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>Nenhuma atividade pendente.</p>
                       ) : (
                         tasks.map(task => (
-                          <div key={task.id} className="glass-card" style={{ padding: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', background: '#fff' }}>
+                          <div key={task.id} className="glass-card" style={{ padding: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
                             <input 
                               type="checkbox" 
                               checked={task.isCompleted} 
@@ -956,8 +1023,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
                           <label style={{ 
                             display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 18px',
-                            border: '2px dashed #cbd5e1', borderRadius: '10px', cursor: 'pointer',
-                            background: '#f8fafc', color: '#64748b', fontSize: '0.875rem', fontWeight: 600,
+                             border: '2px dashed color-mix(in srgb, var(--accent-primary) 30%, #cbd5e1)', borderRadius: '12px', cursor: 'pointer',
+                            background: 'var(--bg-base)', color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: 600,
                             transition: 'all 0.2s'
                           }}>
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
@@ -988,14 +1055,14 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                       </div>
 
                       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                        <button type="submit" className="btn-submit" style={{ width: 'auto', padding: '0 24px', background: '#0f172a', color: '#fff' }}>Adicionar Produto</button>
+                         <button type="submit" className="btn-submit" style={{ width: 'auto', padding: '0 24px' }}>Adicionar Produto</button>
                       </div>
                     </form>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '1rem' }}>
                       {products.length === 0 ? (
                         <p style={{ color: 'var(--text-secondary)', padding: '2rem', gridColumn: '1/-1', textAlign: 'center' }}>Nenhum produto cadastrado ainda.</p>
                       ) : products.map(p => (
-                        <div key={p.id} style={{ border: '1px solid #e2e8f0', borderRadius: '16px', overflow: 'hidden', background: '#fff' }}>
+                        <div key={p.id} className="glass-card" style={{ overflow: 'hidden' }}>
                           {p.imageUrl ? <img src={p.imageUrl} alt={p.name} style={{ width: '100%', height: '140px', objectFit: 'cover' }} /> : (
                             <div style={{ width: '100%', height: '140px', background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                               <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path><line x1="3" y1="6" x2="21" y2="6"></line><path d="M16 10a4 4 0 0 1-8 0"></path></svg>
@@ -1026,7 +1093,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                     </div>
                     <div className="admin-queue-list">
                       {queue.length === 0 ? (
-                        <div className="empty-state" style={{ padding: '4rem', textAlign: 'center', background: '#fff', borderRadius: '20px', border: '1px dashed #e2e8f0' }}>
+                        <div className="empty-state" style={{ padding: '4rem', textAlign: 'center', borderRadius: '20px' }}>
                           <p style={{ color: '#64748b', fontWeight: 500 }}>Nenhum cliente na fila no momento.</p>
                         </div>
                       ) : queue.map((item, index) => (
@@ -1035,7 +1102,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                           <div className="item-main">
                             <h4 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                               {item.name}
-                              {item.isOnWay && <span style={{ fontSize: '0.7rem', background: '#3b82f6', color: '#fff', padding: '2px 8px', borderRadius: '12px', fontWeight: 700 }}>🚗 A CAMINHO</span>}
+                              {item.isOnWay && <span style={{ fontSize: '0.7rem', background: 'var(--accent-primary)', color: '#000', padding: '2px 8px', borderRadius: '12px', fontWeight: 700 }}>🚗 A CAMINHO</span>}
                             </h4>
                             <span className="item-service">{item.serviceName} {item.appointmentTime ? `• 🕒 ${formatTimeISO(item.appointmentTime)}` : ''}</span>
                             {item.status === 'serving' && item.startedAt && <TimeElapsed startedAt={item.startedAt} />}
@@ -1061,7 +1128,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
           {/* Header Action */}
           <div className="role-switcher">
             <button onClick={toggleRole} className="btn-role">
-              Acesso Restrito
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px' }}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+              Admin
             </button>
           </div>
 
@@ -1232,7 +1300,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                     <label>Serviço</label>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '1rem' }}>
                       {tenant.services.map(s => (
-                        <button key={s.id} type="button" onClick={() => setSelectedServiceId(s.id)} className={`service-selection-card ${selectedServiceId === s.id ? 'active' : ''}`} style={{ padding: '1rem', borderRadius: '12px', border: '1px solid #e2e8f0', background: selectedServiceId === s.id ? 'rgba(16,185,129,0.1)' : '#ffffff', color: 'var(--text-primary)' }}>
+                        <button key={s.id} type="button" onClick={() => setSelectedServiceId(s.id)} className={`service-selection-card ${selectedServiceId === s.id ? 'active' : ''}`} style={{ padding: '1rem', borderRadius: '12px', border: '1px solid color-mix(in srgb, var(--accent-primary) 20%, #e2e8f0)', background: selectedServiceId === s.id ? 'rgba(var(--accent-primary-rgb), 0.1)' : 'var(--bg-surface)', color: 'var(--text-primary)' }}>
                           {s.name}
                         </button>
                       ))}
@@ -1272,7 +1340,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       {/* Confirmation Modal */}
       {showConfirmation && (
         <div className="modal-overlay" style={{ zIndex: 10000 }}>
-          <div className="modal-content glass-panel fade-in" style={{ maxWidth: '400px', textAlign: 'center' }}>
+          <div className="modal-content glass-panel fade-in" style={{ maxWidth: '400px', textAlign: 'center', background: 'var(--bg-surface)' }}>
             <div style={{ width: '64px', height: '64px', background: 'var(--success)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem' }}>
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
             </div>
@@ -1317,7 +1385,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       {/* Store Modal */}
       {showStoreModal && (
         <div className="modal-overlay" style={{ zIndex: 10000 }} onClick={() => setShowStoreModal(false)}>
-          <div className="modal-content glass-panel fade-in" onClick={e => e.stopPropagation()} style={{ maxWidth: '680px', width: '92%', background: '#ffffff', padding: '2rem', borderRadius: '24px', border: '1px solid rgba(0,0,0,0.08)', maxHeight: '88vh', overflowY: 'auto' }}>
+          <div className="modal-content glass-panel fade-in" onClick={e => e.stopPropagation()} style={{ maxWidth: '680px', width: '92%', background: 'var(--bg-surface)', padding: '2rem', borderRadius: '24px', border: '1px solid color-mix(in srgb, var(--accent-primary) 20%, rgba(0,0,0,0.08))', maxHeight: '88vh', overflowY: 'auto' }}>
             
             {/* Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
@@ -1330,7 +1398,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
               </button>
             </div>
 
-            <div style={{ width: '100%', height: '2px', background: 'linear-gradient(90deg, #10b981, #0f172a)', borderRadius: '2px', marginBottom: '1.5rem' }}></div>
+            <div style={{ width: '100%', height: '3px', background: 'linear-gradient(90deg, var(--accent-primary), var(--text-primary))', borderRadius: '2px', marginBottom: '1.5rem' }}></div>
 
             {/* Product grid */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1rem' }}>
@@ -1340,7 +1408,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                 const waLink = `https://wa.me/${waNumber}?text=${waMsg}`;
 
                 return (
-                  <div key={p.id} style={{ border: '1px solid #e2e8f0', borderRadius: '18px', overflow: 'hidden', background: '#fff', boxShadow: '0 2px 12px rgba(0,0,0,0.06)', display: 'flex', flexDirection: 'column' }}>
+                  <div key={p.id} className="glass-card" style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                     {p.imageUrl ? (
                       <img src={p.imageUrl} alt={p.name} style={{ width: '100%', height: '145px', objectFit: 'cover' }} />
                     ) : (

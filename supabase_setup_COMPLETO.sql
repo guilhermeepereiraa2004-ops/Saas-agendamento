@@ -54,6 +54,18 @@ CREATE TABLE IF NOT EXISTS financial_records (
     completed_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- Tabela de Configurações Globais da Plataforma
+CREATE TABLE IF NOT EXISTS platform_settings (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    pix_key TEXT,
+    pix_name TEXT,
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Inserir registro padrão se não existir
+INSERT INTO platform_settings (pix_key) 
+SELECT '' WHERE NOT EXISTS (SELECT 1 FROM platform_settings);
+
 
 -- ================================================================
 -- PASSO 2: SEGURANÇA (Row Level Security - RLS)
@@ -103,6 +115,16 @@ CREATE POLICY "Financeiro visível para todos" ON financial_records
 DROP POLICY IF EXISTS "Financeiro pode ser inserido" ON financial_records;
 CREATE POLICY "Financeiro pode ser inserido" ON financial_records
     FOR INSERT WITH CHECK (true);
+
+-- PLATFORM_SETTINGS: Visível para todos
+DROP POLICY IF EXISTS "Configurações visíveis para todos" ON platform_settings;
+CREATE POLICY "Configurações visíveis para todos" ON platform_settings
+    FOR SELECT USING (true);
+
+-- PLATFORM_SETTINGS: Qualquer um pode atualizar (desenvolvimento)
+DROP POLICY IF EXISTS "Configurações podem ser atualizadas" ON platform_settings;
+CREATE POLICY "Configurações podem ser atualizadas" ON platform_settings
+    FOR UPDATE USING (true);
 
 
 -- ================================================================

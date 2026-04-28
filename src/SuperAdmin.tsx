@@ -13,7 +13,9 @@ export default function SuperAdmin() {
   const [showFinancialModal, setShowFinancialModal] = useState(false);
   const [financialEditingTenant, setFinancialEditingTenant] = useState<Tenant | null>(null);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'tenants' | 'financial'>('tenants');
+  const [activeTab, setActiveTab] = useState<'tenants' | 'financial' | 'settings'>('tenants');
+  const [pixKey, setPixKey] = useState('');
+  const [pixName, setPixName] = useState('');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const { showToast } = useToasts();
   
@@ -51,7 +53,15 @@ export default function SuperAdmin() {
   }, []);
 
   const fetchTenants = async () => {
+    // Fetch tenants
     const { data, error } = await supabase.from('tenants').select('*').order('created_at', { ascending: false });
+    
+    // Fetch settings
+    const { data: settingsData } = await supabase.from('platform_settings').select('*').limit(1).single();
+    if (settingsData) {
+      if (settingsData.pix_key) setPixKey(settingsData.pix_key);
+      if (settingsData.pix_name) setPixName(settingsData.pix_name);
+    }
     if (error) {
       console.error('Error fetching tenants:', error);
     } else if (data) {
@@ -132,6 +142,33 @@ export default function SuperAdmin() {
     showToast('Configurações salvas com sucesso!', 'success');
     await fetchTenants();
     return true;
+  };
+
+  const handleSaveSettings = async () => {
+    setLoading(true);
+    const { data } = await supabase.from('platform_settings').select('id').limit(1).single();
+    
+    let error;
+    if (data) {
+      const { error: updateError } = await supabase.from('platform_settings').update({ 
+        pix_key: pixKey,
+        pix_name: pixName 
+      }).eq('id', data.id);
+      error = updateError;
+    } else {
+      const { error: insertError } = await supabase.from('platform_settings').insert([{ 
+        pix_key: pixKey,
+        pix_name: pixName 
+      }]);
+      error = insertError;
+    }
+    
+    setLoading(false);
+    if (error) {
+      showToast('Erro ao salvar configurações: ' + error.message, 'error');
+    } else {
+      showToast('Configurações salvas com sucesso!', 'success');
+    }
   };
 
   const handleAddService = () => {
@@ -373,6 +410,13 @@ export default function SuperAdmin() {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
             <span className="nav-text">SaaS Financeiro</span>
           </button>
+          <button 
+            className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
+            onClick={() => { setActiveTab('settings'); setShowForm(false); setIsMobileMenuOpen(false); }}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            <span className="nav-text">Configurações</span>
+          </button>
         </nav>
 
         <div style={{ marginTop: 'auto', paddingTop: '2rem' }}>
@@ -395,9 +439,9 @@ export default function SuperAdmin() {
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
             </button>
             <div>
-              <h2>{activeTab === 'tenants' ? 'Gestão de Estabelecimentos' : 'Controle Financeiro SaaS'}</h2>
+              <h2>{activeTab === 'tenants' ? 'Gestão de Estabelecimentos' : activeTab === 'settings' ? 'Configurações Globais' : 'Controle Financeiro SaaS'}</h2>
               <p style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>
-                {activeTab === 'tenants' ? 'Visualize e gerencie todos os clientes da plataforma.' : 'Acompanhe a saúde financeira e assinaturas do seu SaaS.'}
+                {activeTab === 'tenants' ? 'Visualize e gerencie todos os clientes da plataforma.' : activeTab === 'settings' ? 'Ajuste os dados globais do seu SaaS, como chaves de recebimento PIX.' : 'Acompanhe a saúde financeira e assinaturas do seu SaaS.'}
               </p>
             </div>
           </div>
@@ -743,7 +787,6 @@ export default function SuperAdmin() {
                         <button
                           onClick={() => handleDelete(tenant.id, tenant.name)}
                           className="btn-premium btn-premium-danger"
-                          style={{ width: '42px', padding: 0 }}
                           title="Excluir"
                         >
                           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
@@ -755,6 +798,45 @@ export default function SuperAdmin() {
               </div>
             )}
           </>
+        ) : activeTab === 'settings' ? (
+          <div className="fade-in">
+            <div className="premium-card" style={{ padding: '2.5rem', maxWidth: '600px' }}>
+              <h3 style={{ marginBottom: '0.5rem', fontSize: '1.25rem' }}>Dados para Recebimento</h3>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '2rem' }}>
+                Configure a chave PIX que os assinantes (estabelecimentos) verão quando a mensalidade deles vencer.
+              </p>
+              
+              <div className="form-group">
+                <label>Nome do Beneficiário (PIX)</label>
+                <input 
+                  type="text" 
+                  value={pixName} 
+                  onChange={e => setPixName(e.target.value)} 
+                  placeholder="Nome completo ou da empresa" 
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Sua Chave PIX</label>
+                <input 
+                  type="text" 
+                  value={pixKey} 
+                  onChange={e => setPixKey(e.target.value)} 
+                  placeholder="E-mail, CPF/CNPJ, Telefone ou Chave Aleatória" 
+                />
+              </div>
+
+              <div style={{ marginTop: '2rem' }}>
+                <button 
+                  onClick={handleSaveSettings} 
+                  className="btn-premium btn-premium-primary" 
+                  disabled={loading}
+                >
+                  {loading ? 'Salvando...' : 'Salvar Configurações'}
+                </button>
+              </div>
+            </div>
+          </div>
         ) : (
           <div className="fade-in">
             {/* Stats Overview */}
