@@ -225,7 +225,10 @@ function App() {
 
         {/* Hero Section */}
         <section style={{ 
-          padding: 'clamp(2rem, 10vw, 4rem) max(5vw, 2rem) clamp(4rem, 15vw, 8rem)',
+          minHeight: 'calc(100vh - 80px)', // Compensa a altura aproximada da navbar
+          display: 'flex',
+          alignItems: 'center',
+          padding: '2rem max(5vw, 2rem)',
           maxWidth: '1400px',
           margin: '0 auto',
           position: 'relative'
