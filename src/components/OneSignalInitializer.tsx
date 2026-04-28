@@ -1,15 +1,15 @@
 import { useEffect } from 'react';
 
+// Declarar OneSignal no objeto window para o TypeScript
 declare global {
   interface Window {
     OneSignalDeferred: any[];
     OneSignal: any;
-    _oneSignalInitialized: boolean;
+    _oneSignalInitialized?: boolean;
   }
 }
 
 let initializationError: string | null = null;
-let isInitialized = false;
 
 export function OneSignalInitializer() {
   useEffect(() => {
@@ -44,75 +44,44 @@ export function OneSignalInitializer() {
         await OneSignal.init({
           appId: appId,
           allowLocalhostAsSecureOrigin: true,
-          notifyButton: { enable: false },
         });
-        isInitialized = true;
-        initializationError = null;
         console.log('OneSignal: Inicializado com sucesso.');
-      } catch (e: any) {
-        console.error('OneSignal: Erro na inicialização:', e);
-        initializationError = e.toString();
-        if (initializationError?.includes('Can only be used on')) {
-          console.warn('⚠️ OneSignal: Erro de Domínio. Ative "Local Testing" no Dashboard do OneSignal.');
+      } catch (error) {
+        console.error('OneSignal: Erro na inicialização:', error);
+        initializationError = String(error);
+        if (String(error).includes('SecurityError') || String(error).includes('MIME type')) {
+          console.warn('⚠️ OneSignal: Erro de Domínio ou Service Worker. Verifique os arquivos na pasta public.');
         }
       }
     });
+
+    const script = document.createElement('script');
+    script.src = 'https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js';
+    script.defer = true;
+    document.head.appendChild(script);
   }, []);
 
   return null;
 }
 
-// Helper para vincular o usuário atual ao OneSignal
-export const loginOneSignal = async (externalId: string) => {
+/**
+ * Helpers para interagir com o OneSignal de forma segura
+ */
+
+// Solicitar permissão de forma amigável (Slidedown)
+export const requestNotificationPermission = async () => {
+  if (!import.meta.env.PROD) return;
+
   window.OneSignalDeferred = window.OneSignalDeferred || [];
   window.OneSignalDeferred.push(async (OneSignal: any) => {
+    console.log('OneSignal: Preparando solicitação de permissão (Slidedown)...');
     try {
-      console.log('OneSignal: Tentando login:', externalId);
-      await OneSignal.login(externalId);
-      console.log('OneSignal: Usuário logado com sucesso');
-    } catch (error) {
-      console.error('OneSignal: Erro ao logar:', error);
+      // Slidedown é menos propenso a ser bloqueado pelo navegador
+      await OneSignal.Slidedown.prompt();
+    } catch (err) {
+      console.error('OneSignal: Erro ao abrir Slidedown, tentando nativo...', err);
+      await OneSignal.Notifications.requestPermission();
     }
-  });
-};
-
-// Helper para solicitar permissão de notificação
-export const requestNotificationPermission = async () => {
-  console.log('OneSignal: Preparando solicitação de permissão...');
-  
-  if (initializationError) {
-    if (initializationError.includes('Can only be used on')) {
-      throw new Error('CONFIG_ERROR: O OneSignal está configurado apenas para o domínio de produção. Ative a opção "Local Testing" no painel do OneSignal para testar no localhost.');
-    }
-    throw new Error(`INIT_ERROR: ${initializationError}`);
-  }
-
-  return new Promise<void>((resolve, reject) => {
-    // Timeout para evitar que a promessa fique "pendurada"
-    const timeout = setTimeout(() => {
-      if (!isInitialized) {
-        reject(new Error('TIMEOUT: O SDK do OneSignal ainda não inicializou.'));
-      } else {
-        reject(new Error('TIMEOUT: O SDK não respondeu. Verifique seu AdBlocker.'));
-      }
-    }, 5000);
-
-    window.OneSignalDeferred = window.OneSignalDeferred || [];
-    window.OneSignalDeferred.push(async (OneSignal: any) => {
-      clearTimeout(timeout);
-      try {
-        if (!OneSignal.Notifications.isPushSupported()) {
-          return reject(new Error('NOT_SUPPORTED: Este navegador não suporta notificações.'));
-        }
-
-        console.log('OneSignal: Abrindo prompt...');
-        await OneSignal.Notifications.requestPermission();
-        resolve();
-      } catch (error) {
-        console.error('OneSignal: Falha ao solicitar permissão:', error);
-        reject(error);
-      }
-    });
   });
 };
 
@@ -152,14 +121,13 @@ export const getOneSignalId = async (): Promise<string | null> => {
         const id = OneSignal.User.PushSubscription.id;
         resolve(id || null);
       } catch (e) {
-        console.error('OneSignal: Erro ao ler ID:', e);
         resolve(null);
       }
     });
   });
 };
 
-// Helper para enviar notificação (Requer REST API KEY - idealmente feito no backend)
+// Disparar notificação via REST API (Backend/Helper)
 export const sendPushNotification = async (pushId: string, title: string, message: string) => {
   const appId = import.meta.env.VITE_ONESIGNAL_APP_ID;
   const apiKey = import.meta.env.VITE_ONESIGNAL_REST_API_KEY;
@@ -170,7 +138,7 @@ export const sendPushNotification = async (pushId: string, title: string, messag
   }
 
   try {
-    const response = await fetch('https://onesignal.com/api/v1/notifications', {
+    await fetch('https://onesignal.com/api/v1/notifications', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json; charset=utf-8',
@@ -179,14 +147,11 @@ export const sendPushNotification = async (pushId: string, title: string, messag
       body: JSON.stringify({
         app_id: appId,
         include_subscription_ids: [pushId],
-        headings: { en: title, pt: title },
         contents: { en: message, pt: message },
-        priority: 10
+        headings: { en: title, pt: title }
       })
     });
-    const data = await response.json();
-    console.log('OneSignal: Notificação enviada:', data);
   } catch (error) {
-    console.error('OneSignal: Erro ao enviar notificação:', error);
+    console.error('OneSignal: Erro ao disparar notificação via API:', error);
   }
 };
