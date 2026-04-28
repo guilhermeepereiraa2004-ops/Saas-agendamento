@@ -160,7 +160,9 @@ export const sendPushNotification = async (pushId: string, title: string, messag
         app_id: appId,
         include_subscription_ids: [pushId],
         contents: { en: message, pt: message },
-        headings: { en: title, pt: title }
+        headings: { en: title, pt: title },
+        priority: 10, // Prioridade alta para "pular" na tela
+        android_visibility: 1 // Torna visível na tela de bloqueio
       })
     });
     
