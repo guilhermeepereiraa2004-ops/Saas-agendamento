@@ -5,7 +5,7 @@ import { supabase } from './lib/supabase';
 import FinancialView from './FinancialView';
 import { getProfessionConfig } from './lib/professionConfig';
 import { useToasts } from './components/ToastProvider';
-import { loginOneSignal, requestNotificationPermission, getOneSignalId, sendPushNotification } from './components/OneSignalInitializer';
+import { loginOneSignal, requestNotificationPermission, getOneSignalId, sendPushNotification, isNotificationEnabled } from './components/OneSignalInitializer';
 
 function TimeElapsed({ startedAt }: { startedAt: string }) {
   const [mins, setMins] = useState(0);
@@ -195,6 +195,19 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const [isAdminAddModalOpen, setIsAdminAddModalOpen] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [showLeaveModal, setShowLeaveModal] = useState(false);
+
+  const [notifsEnabled, setNotifsEnabled] = useState(true);
+
+  useEffect(() => {
+    const checkNotifs = async () => {
+      const enabled = await isNotificationEnabled();
+      setNotifsEnabled(enabled);
+    };
+    checkNotifs();
+    // Checar a cada 2 segundos caso o usuário mude nas configurações do browser
+    const interval = setInterval(checkNotifs, 2000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Load stats from localStorage on mount (for persistent auth)
   useEffect(() => {
@@ -1350,9 +1363,29 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                       ))}
                     </div>
                   </div>
-                  <button type="submit" className="btn-submit" style={{ marginTop: '1rem' }} disabled={loading}>
-                    {loading ? 'Aguarde...' : 'Confirmar'}
-                  </button>
+                  {(import.meta.env.PROD && !notifsEnabled) ? (
+                    <div style={{ marginTop: '1.5rem', padding: '1.5rem', background: 'rgba(239, 68, 68, 0.05)', borderRadius: '16px', border: '1px dashed #ef4444', textAlign: 'center' }}>
+                      <p style={{ fontSize: '0.9rem', color: '#ef4444', marginBottom: '1rem', fontWeight: 600 }}>
+                        ⚠️ Notificações Desativadas
+                      </p>
+                      <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
+                        Para entrar na fila e receber o aviso de que sua vez chegou, você precisa ativar as notificações.
+                      </p>
+                      <button 
+                        type="button" 
+                        onClick={() => requestNotificationPermission()}
+                        className="btn-submit" 
+                        style={{ background: '#0f172a', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}
+                      >
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+                        Ativar Notificações Agora
+                      </button>
+                    </div>
+                  ) : (
+                    <button type="submit" className="btn-submit" style={{ marginTop: '1rem' }} disabled={loading}>
+                      {loading ? 'Aguarde...' : 'Confirmar'}
+                    </button>
+                  )}
                 </form>
               )}
             </section>

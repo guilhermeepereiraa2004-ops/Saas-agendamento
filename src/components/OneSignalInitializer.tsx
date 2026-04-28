@@ -116,6 +116,20 @@ export const requestNotificationPermission = async () => {
   });
 };
 
+// Helper para verificar se as notificações estão ativas
+export const isNotificationEnabled = async (): Promise<boolean> => {
+  if (!import.meta.env.PROD) return true; // Em dev, sempre true
+  
+  return new Promise((resolve) => {
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    window.OneSignalDeferred.push(async (OneSignal: any) => {
+      resolve(OneSignal.Notifications.permission);
+    });
+    // Timeout caso o OneSignal não responda
+    setTimeout(() => resolve(false), 1000);
+  });
+};
+
 // Helper para obter o ID de inscrição atual (OneSignal V5)
 export const getOneSignalId = async (): Promise<string | null> => {
   return new Promise((resolve) => {
