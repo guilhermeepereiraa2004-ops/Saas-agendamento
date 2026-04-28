@@ -5,7 +5,7 @@ import { supabase } from './lib/supabase';
 import FinancialView from './FinancialView';
 import { getProfessionConfig } from './lib/professionConfig';
 import { useToasts } from './components/ToastProvider';
-import { loginOneSignal, requestNotificationPermission } from './components/OneSignalInitializer';
+import { loginOneSignal, requestNotificationPermission, getOneSignalId, sendPushNotification } from './components/OneSignalInitializer';
 
 function TimeElapsed({ startedAt }: { startedAt: string }) {
   const [mins, setMins] = useState(0);
@@ -42,6 +42,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       joinedAt: q.joined_at,
       appointmentTime: q.appointment_time,
       isOnWay: q.is_on_way,
+      pushId: q.push_id,
       startedAt: q.started_at
     });
 
@@ -353,6 +354,9 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         return;
       }
 
+      // Capture OneSignal ID if possible
+      const pushId = await getOneSignalId();
+
       const { data, error } = await supabase.from('queue_items').insert([{
         tenant_id: tenant.id,
         name: name.trim(),
@@ -361,7 +365,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         service_name: selectedSvc.name,
         price: selectedSvc.price,
         status: tenant.bookingType === 'appointment' ? 'ready' : 'waiting', // Appointments skip waiting to be 'served' by time
-        appointment_time: tenant.bookingType === 'appointment' ? `${selectedDate}T${selectedTimeSlot}:00` : null
+        appointment_time: tenant.bookingType === 'appointment' ? `${selectedDate}T${selectedTimeSlot}:00` : null,
+        push_id: pushId
       }]).select();
 
       if (!error && data) {
@@ -410,7 +415,19 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
   const handleStartService = async (id: string) => {
     if (!isAuthenticated) return;
-    await supabase.from('queue_items').update({ status: 'serving', started_at: new Date().toISOString() }).eq('id', id);
+    
+    // Find client to get push_id
+    const client = queue.find(q => q.id === id);
+    
+    const { error } = await supabase.from('queue_items').update({ status: 'serving', started_at: new Date().toISOString() }).eq('id', id);
+    
+    if (!error && client?.pushId) {
+      sendPushNotification(
+        client.pushId,
+        'Sua vez chegou! ✂️',
+        `Olá ${client.name}, o profissional já está te aguardando. Pode vir!`
+      );
+    }
   };
 
   const handleRemoveFromQueue = async (id: string) => {

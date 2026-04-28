@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS queue_items (
     price       DECIMAL(10,2) NOT NULL,
     status      TEXT NOT NULL CHECK (status IN ('waiting', 'serving', 'ready')),
     appointment_time TIMESTAMPTZ,
+    push_id     TEXT,
     joined_at   TIMESTAMPTZ DEFAULT now()
 );
 

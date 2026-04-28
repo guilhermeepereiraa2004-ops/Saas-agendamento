@@ -102,3 +102,45 @@ export const requestNotificationPermission = async () => {
     });
   });
 };
+
+// Helper para obter o ID de inscrição atual (OneSignal V5)
+export const getOneSignalId = async (): Promise<string | null> => {
+  return new Promise((resolve) => {
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    window.OneSignalDeferred.push(async (OneSignal: any) => {
+      resolve(OneSignal.User.PushSubscription.id || null);
+    });
+  });
+};
+
+// Helper para enviar notificação (Requer REST API KEY - idealmente feito no backend)
+export const sendPushNotification = async (pushId: string, title: string, message: string) => {
+  const appId = import.meta.env.VITE_ONESIGNAL_APP_ID;
+  const apiKey = import.meta.env.VITE_ONESIGNAL_REST_API_KEY;
+
+  if (!appId || !apiKey || apiKey === 'sua_chave_rest_api_aqui') {
+    console.warn('OneSignal: REST API Key não configurada. Não é possível enviar notificações automáticas.');
+    return;
+  }
+
+  try {
+    const response = await fetch('https://onesignal.com/api/v1/notifications', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Authorization': `Basic ${apiKey}`
+      },
+      body: JSON.stringify({
+        app_id: appId,
+        include_subscription_ids: [pushId],
+        headings: { en: title, pt: title },
+        contents: { en: message, pt: message },
+        priority: 10
+      })
+    });
+    const data = await response.json();
+    console.log('OneSignal: Notificação enviada:', data);
+  } catch (error) {
+    console.error('OneSignal: Erro ao enviar notificação:', error);
+  }
+};

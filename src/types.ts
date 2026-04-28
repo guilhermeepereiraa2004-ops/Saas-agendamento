@@ -41,6 +41,7 @@ export interface QueueItem {
   joinedAt: string; // ISO string 
   appointmentTime?: string; // ISO string
   isOnWay?: boolean;
+  pushId?: string;
   startedAt?: string;
 }
 
