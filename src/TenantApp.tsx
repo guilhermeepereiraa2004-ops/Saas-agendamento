@@ -476,6 +476,28 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     // Next person stays as 'waiting' - barber manually clicks Iniciar
   };
 
+  const handleCallClient = async (id: string) => {
+    if (!isAuthenticated) return;
+    
+    const client = queue.find(q => q.id === id);
+    
+    const { error } = await supabase.from('queue_items').update({ 
+      status: 'ready' 
+    }).eq('id', id);
+    
+    if (!error && client?.pushId && import.meta.env.PROD) {
+      sendPushNotification(
+        client.pushId,
+        'Sua vez está chegando! ✂️',
+        `Olá ${client.name}, por favor, aproxime-se. O profissional já vai te atender em instantes!`
+      );
+      showToast(`Cliente ${client.name} chamado!`, 'success');
+    } else if (!import.meta.env.PROD) {
+      console.log('[DEBUG] Notificação de Chamada suprimida (Modo DEV)');
+      showToast(`Cliente chamado! (Modo DEV)`, 'success');
+    }
+  };
+
   const handleStartService = async (id: string) => {
     if (!isAuthenticated) return;
     
@@ -491,11 +513,9 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     if (!error && client?.pushId && import.meta.env.PROD) {
       sendPushNotification(
         client.pushId,
-        'Sua vez chegou! ✂️',
-        `Olá ${client.name}, o profissional já está te aguardando. Pode vir!`
+        'Atendimento Iniciado! ✂️',
+        `Olá ${client.name}, seu atendimento começou. Aproveite a experiência!`
       );
-    } else if (!import.meta.env.PROD) {
-      console.log('[DEBUG] Notificação suprimida (Modo DEV)');
     }
   };
 
@@ -1205,8 +1225,19 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                             {item.status === 'serving' && item.startedAt && <TimeElapsed startedAt={item.startedAt} />}
                           </div>
                           <div className="item-actions">
-                            {item.status === 'waiting' && <button onClick={() => handleStartService(item.id)} className="btn-action-start">Atender</button>}
-                            {item.status === 'serving' && <button onClick={() => handleCompleteService(item.id)} className="btn-action-complete">Finalizar</button>}
+                            {item.status === 'serving' ? (
+                              <button onClick={() => handleCompleteService(item.id)} className="action-btn complete">
+                                Concluir
+                              </button>
+                            ) : item.status === 'ready' ? (
+                              <button onClick={() => handleStartService(item.id)} className="action-btn start">
+                                Iniciar Atendimento
+                              </button>
+                            ) : (
+                              <button onClick={() => handleCallClient(item.id)} className="action-btn call" style={{ background: 'var(--accent-primary)', color: '#000' }}>
+                                Chamar Cliente
+                              </button>
+                            )}
                             <button onClick={() => handleRemoveFromQueue(item.id)} className="btn-action-remove">✕</button>
                           </div>
                         </div>
