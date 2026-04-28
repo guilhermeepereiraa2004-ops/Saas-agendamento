@@ -1440,7 +1440,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                         ⚠️ Notificações Necessárias
                       </p>
                       
-                      {Notification.permission === 'denied' ? (
+                      { (typeof Notification !== 'undefined' && Notification.permission === 'denied') ? (
                         <>
                           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
                             Você **bloqueou** as notificações. Para entrar na fila:
