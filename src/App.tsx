@@ -90,8 +90,8 @@ function App() {
         return (
           <div className="home-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: '#09090b' }}>
             <div className="glass-panel fade-in" style={{ padding: '3rem', maxWidth: '400px', width: '100%', textAlign: 'center' }}>
-              <div style={{ width: '50px', height: '50px', background: 'linear-gradient(135deg, #10b981, #3b82f6)', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem' }}>
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+              <div style={{ width: '60px', height: '60px', margin: '0 auto 1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <img src="/logo_suavez.png" alt="Sua Vez Logo" style={{ width: '100%', height: 'auto', borderRadius: '12px' }} />
               </div>
               <h2 className="text-gradient" style={{ marginBottom: '0.5rem', fontSize: '1.8rem', fontWeight: 800 }}>Sua Vez</h2>
               <p style={{ color: '#a1a1aa', marginBottom: '2rem', fontSize: '0.9rem' }}>Acesso Administrativo</p>
@@ -192,9 +192,7 @@ function App() {
           borderBottom: '1px solid rgba(255,255,255,0.08)'
         }}>
            <div style={{ display: 'flex', alignItems: 'center', gap: 'clamp(8px, 2vw, 12px)' }}>
-             <div style={{ width: 'clamp(30px, 8vw, 36px)', height: 'clamp(30px, 8vw, 36px)', background: 'var(--accent-primary)', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>
-             </div>
+             <img src="/logo_suavez.png" alt="Sua Vez Logo" style={{ width: 'clamp(35px, 10vw, 45px)', height: 'auto', borderRadius: '8px' }} />
              <span className="text-gradient" style={{ fontSize: 'clamp(0.95rem, 4.5vw, 1.2rem)', fontWeight: 800, fontFamily: 'var(--font-heading)', letterSpacing: '-0.5px' }}>Sua Vez</span>
            </div>
 
