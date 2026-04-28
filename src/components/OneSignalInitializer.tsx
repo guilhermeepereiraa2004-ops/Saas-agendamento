@@ -9,8 +9,6 @@ declare global {
   }
 }
 
-let initializationError: string | null = null;
-
 export function OneSignalInitializer() {
   useEffect(() => {
     const appId = import.meta.env.VITE_ONESIGNAL_APP_ID;
@@ -30,7 +28,6 @@ export function OneSignalInitializer() {
 
     if (!appId || appId === 'seu_app_id_do_onesignal_aqui') {
       console.warn('OneSignal: VITE_ONESIGNAL_APP_ID não configurado corretamente.');
-      initializationError = 'AppID não configurado';
       return;
     }
 
@@ -48,7 +45,6 @@ export function OneSignalInitializer() {
         console.log('OneSignal: Inicializado com sucesso.');
       } catch (error) {
         console.error('OneSignal: Erro na inicialização:', error);
-        initializationError = String(error);
         if (String(error).includes('SecurityError') || String(error).includes('MIME type')) {
           console.warn('⚠️ OneSignal: Erro de Domínio ou Service Worker. Verifique os arquivos na pasta public.');
         }
@@ -67,6 +63,21 @@ export function OneSignalInitializer() {
 /**
  * Helpers para interagir com o OneSignal de forma segura
  */
+
+// Identificar usuário no OneSignal
+export const loginOneSignal = (externalId: string) => {
+  if (!import.meta.env.PROD) return;
+  
+  window.OneSignalDeferred = window.OneSignalDeferred || [];
+  window.OneSignalDeferred.push(async (OneSignal: any) => {
+    try {
+      await OneSignal.login(externalId);
+      console.log('OneSignal: Usuário identificado:', externalId);
+    } catch (err) {
+      console.error('OneSignal: Erro ao fazer login do usuário:', err);
+    }
+  });
+};
 
 // Solicitar permissão de forma amigável (Slidedown)
 export const requestNotificationPermission = async () => {
