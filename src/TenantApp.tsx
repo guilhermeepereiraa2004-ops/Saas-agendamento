@@ -72,6 +72,11 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         isOnline: tenantData.is_online ?? true,
         subscriptionStatus: tenantData.subscription_status,
         nextPaymentAt: tenantData.next_payment_at ? tenantData.next_payment_at.split('T')[0] : undefined,
+        bookingType: tenantData.booking_type || 'queue',
+        workingHours: typeof tenantData.working_hours === 'string' ? JSON.parse(tenantData.working_hours) : (tenantData.working_hours || []),
+        appointmentInterval: tenantData.appointment_interval || 30,
+        lunchStart: tenantData.lunch_start || '12:00',
+        lunchEnd: tenantData.lunch_end || '13:00',
       }));
     }
 
@@ -130,8 +135,12 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
             isOnline: payload.new.is_online ?? prev.isOnline,
             name: payload.new.name ?? prev.name,
             primaryColor: payload.new.primary_color ?? prev.primaryColor,
-            subscriptionStatus: payload.new.subscription_status ?? prev.subscriptionStatus,
             nextPaymentAt: payload.new.next_payment_at ? payload.new.next_payment_at.split('T')[0] : prev.nextPaymentAt,
+            bookingType: payload.new.booking_type ?? prev.bookingType,
+            workingHours: payload.new.working_hours ?? prev.workingHours,
+            appointmentInterval: payload.new.appointment_interval ?? prev.appointmentInterval,
+            lunchStart: payload.new.lunch_start ?? prev.lunchStart,
+            lunchEnd: payload.new.lunch_end ?? prev.lunchEnd,
           }));
         }
       )
@@ -169,19 +178,14 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   });
   const [selectedTimeSlot, setSelectedTimeSlot] = useState('');
 
-  // Set initial service when tenant services load
-  useEffect(() => {
-    if (tenant.services && tenant.services.length > 0) {
-      setSelectedServiceId(tenant.services[0].id);
-    }
-  }, [tenant.services]);
+  // O serviço não é mais selecionado automaticamente para evitar mal entendidos
 
   // Auth state specifics to this tenant
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showLogin, setShowLogin] = useState(false);
-  const [activeTab, setActiveTab] = useState<'queue' | 'financial' | 'tasks' | 'store'>('queue');
+  const [activeTab, setActiveTab] = useState<'queue' | 'financial' | 'tasks' | 'store' | 'settings'>('queue');
   const [tasks, setTasks] = useState<TenantTask[]>([]);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [products, setProducts] = useState<TenantProduct[]>([]);
@@ -195,6 +199,9 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const [isAdminAddModalOpen, setIsAdminAddModalOpen] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [showLeaveModal, setShowLeaveModal] = useState(false);
+  const [isServiceListOpen, setIsServiceListOpen] = useState(false);
+  const [showJoinConfirmation, setShowJoinConfirmation] = useState(false);
+  const [itemForCancel, setItemForCancel] = useState<QueueItem | null>(null);
 
   const [notifsEnabled, setNotifsEnabled] = useState(true);
 
@@ -281,6 +288,115 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     fetchProducts();
   }, [tenant.id]);
 
+  const updateBookingType = async (type: 'queue' | 'appointment') => {
+    setLoading(true);
+    const { error } = await supabase
+      .from('tenants')
+      .update({ booking_type: type })
+      .eq('id', tenant.id);
+    
+    if (error) {
+      showToast('Erro ao atualizar modelo: ' + error.message, 'error');
+    } else {
+      setTenant(prev => ({ ...prev, bookingType: type }));
+      showToast('Modelo de atendimento atualizado!', 'success');
+    }
+    setLoading(false);
+  };
+
+  const updateSchedulingSettings = async (field: string, value: any) => {
+    setLoading(true);
+    const { error } = await supabase
+      .from('tenants')
+      .update({ [field]: value })
+      .eq('id', tenant.id);
+    
+    if (error) {
+      showToast('Erro ao atualizar configuração: ' + error.message, 'error');
+    } else {
+      setTenant(prev => ({ ...prev, [field === 'appointment_interval' ? 'appointmentInterval' : field === 'lunch_start' ? 'lunchStart' : 'lunchEnd']: value }));
+      showToast('Configuração atualizada!', 'success');
+    }
+    setLoading(false);
+  };
+
+  const updateWorkingHours = async (newHours: any[]) => {
+    setLoading(true);
+    const { error } = await supabase
+      .from('tenants')
+      .update({ working_hours: newHours })
+      .eq('id', tenant.id);
+    
+    if (error) {
+      showToast('Erro ao atualizar horários: ' + error.message, 'error');
+    } else {
+      setTenant(prev => ({ ...prev, workingHours: newHours }));
+      showToast('Horários atualizados!', 'success');
+    }
+    setLoading(false);
+  };
+
+  const generateTimeSlots = () => {
+    if (!tenant.workingHours || !selectedDate) return [];
+
+    const date = new Date(selectedDate + 'T00:00:00');
+    const dayOfWeek = date.getDay(); // 0 (Sun) to 6 (Sat)
+    const dayConfig = tenant.workingHours.find(h => h.day === dayOfWeek);
+
+    if (!dayConfig) return [];
+
+    const slots: string[] = [];
+    const [startH, startM] = dayConfig.start.split(':').map(Number);
+    const [endH, endM] = dayConfig.end.split(':').map(Number);
+    const interval = tenant.appointmentInterval || 30;
+
+    const current = new Date(date);
+    current.setHours(startH, startM, 0, 0);
+
+    const end = new Date(date);
+    end.setHours(endH, endM, 0, 0);
+
+    const now = new Date();
+
+    const lStart = tenant.lunchStart ? tenant.lunchStart.split(':').map(Number) : null;
+    const lEnd = tenant.lunchEnd ? tenant.lunchEnd.split(':').map(Number) : null;
+    
+    const lunchStartTime = lStart ? new Date(date).setHours(lStart[0], lStart[1], 0, 0) : null;
+    const lunchEndTime = lEnd ? new Date(date).setHours(lEnd[0], lEnd[1], 0, 0) : null;
+
+    while (current < end) {
+      const timeStr = current.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', hour12: false });
+      
+      const currentTimeMs = current.getTime();
+      const isLunch = lunchStartTime && lunchEndTime && currentTimeMs >= lunchStartTime && currentTimeMs < lunchEndTime;
+      const isPast = date.toDateString() === now.toDateString() && current < now;
+
+      // Check if slot is already taken
+      const isTaken = queue.some(item => {
+        if (!item.appointmentTime) return false;
+        const itemDate = new Date(item.appointmentTime);
+        
+        // Comparação robusta de data e hora
+        const isSameDay = itemDate.getFullYear() === date.getFullYear() &&
+                          itemDate.getMonth() === date.getMonth() &&
+                          itemDate.getDate() === date.getDate();
+        
+        const itemTimeStr = itemDate.getHours().toString().padStart(2, '0') + ':' + 
+                           itemDate.getMinutes().toString().padStart(2, '0');
+        
+        return isSameDay && itemTimeStr === timeStr;
+      });
+
+      if (!isLunch && !isPast && !isTaken) {
+        slots.push(timeStr);
+      }
+
+      current.setMinutes(current.getMinutes() + interval);
+    }
+
+    return slots;
+  };
+
   // Compress image via Canvas before upload (max 800px, 75% quality JPEG)
   const compressImage = (file: File): Promise<Blob> => {
     return new Promise((resolve) => {
@@ -319,49 +435,55 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     prevQueueRef.current = queue;
   }, [queue, isAuthenticated]);
 
-  const [myQueueItemId, setMyQueueItemId] = useState<string | null>(() => 
-    localStorage.getItem(`suavez_customer_id_${tenant.id}`)
-  );
+  const [myQueueItemIds, setMyQueueItemIds] = useState<string[]>(() => {
+    const stored = localStorage.getItem(`suavez_customer_ids_${tenant.id}`);
+    if (stored) {
+      try { return JSON.parse(stored); } catch { return []; }
+    }
+    // Suporte legado para ID único
+    const legacy = localStorage.getItem(`suavez_customer_id_${tenant.id}`);
+    return legacy ? [legacy] : [];
+  });
 
-  const amIInQueue = queue.find(item => item.id === myQueueItemId);
+  const [forceShowJoinForm, setForceShowJoinForm] = useState(false);
+
+  const myItemsInQueue = queue.filter(item => myQueueItemIds.includes(item.id));
 
   // Limpar localStorage se não estiver mais na fila
   useEffect(() => {
-    if (myQueueItemId && !amIInQueue && queue.length > 0) {
-      // Pequeno delay para garantir que a fila carregou
+    if (myQueueItemIds.length > 0 && queue.length > 0) {
       const timer = setTimeout(() => {
-        if (!queue.find(item => item.id === myQueueItemId)) {
-          localStorage.removeItem(`suavez_customer_id_${tenant.id}`);
-          localStorage.removeItem(`suavez_in_queue_${tenant.id}`);
-          setMyQueueItemId(null);
+        const stillInQueue = myQueueItemIds.filter(id => queue.some(item => item.id === id));
+        if (stillInQueue.length !== myQueueItemIds.length) {
+          setMyQueueItemIds(stillInQueue);
+          localStorage.setItem(`suavez_customer_ids_${tenant.id}`, JSON.stringify(stillInQueue));
         }
       }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [queue, myQueueItemId]);
+  }, [queue, myQueueItemIds]);
 
   // Trigger confirmation modal
   const handleJoinQueue = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !selectedServiceId) return;
+    if (!name.trim()) return;
+    
+    if (!selectedServiceId) {
+      showToast('Por favor, selecione um serviço!', 'warning');
+      return;
+    }
     if (tenant.bookingType === 'appointment' && !selectedTimeSlot) {
       showToast('Por favor, selecione um horário!', 'warning');
       return;
     }
     
-    // Pedir permissão de notificações se for produção
-    if (import.meta.env.PROD) {
-      requestNotificationPermission();
-    }
-    
-    // Executa a entrada na fila
-    await confirmJoinQueue();
+    // Abrir modal de confirmação
+    setShowJoinConfirmation(true);
   };
 
   // Status counts for the summary bar
   const servingCount = queue.filter(item => item.status === 'serving').length;
   const waitingCount = queue.filter(item => item.status === 'waiting' || item.status === 'ready').length;
-  const totalCount = queue.length;
 
   // Handle actual adding to queue
   const confirmJoinQueue = async () => {
@@ -406,7 +528,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         service_name: selectedSvc.name,
         price: selectedSvc.price,
         status: tenant.bookingType === 'appointment' ? 'ready' : 'waiting',
-        appointment_time: tenant.bookingType === 'appointment' ? `${selectedDate}T${selectedTimeSlot}:00` : null,
+        appointment_time: tenant.bookingType === 'appointment' ? getISOWithOffset(selectedDate, selectedTimeSlot) : null,
         push_id: pushId
       }]).select();
 
@@ -417,9 +539,12 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         console.log('[DEBUG] Sucesso! Dados retornados:', data[0]);
         setName('');
         setCustomerWhatsapp('');
+        
+        const newIds = [...myQueueItemIds, data[0].id];
+        setMyQueueItemIds(newIds);
+        localStorage.setItem(`suavez_customer_ids_${tenant.id}`, JSON.stringify(newIds));
         localStorage.setItem(`suavez_in_queue_${tenant.id}`, 'true');
-        localStorage.setItem(`suavez_customer_id_${tenant.id}`, data[0].id);
-        setMyQueueItemId(data[0].id);
+        setForceShowJoinForm(false);
         
         // Forçar atualização manual da fila caso o realtime falhe
         fetchData();
@@ -435,7 +560,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
           sendPushNotification(
             tenantData.admin_push_id,
             'Novo Cliente na Fila! 👤',
-            `${name.trim()} acabou de entrar para ${selectedSvc.name}.`
+            `${name.trim()} acabou de entrar para ${selectedSvc.name}.`,
+            window.location.origin + '/' + tenant.slug
           );
         }
       }
@@ -489,7 +615,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       sendPushNotification(
         client.pushId,
         'Sua vez está chegando! ✂️',
-        `Olá ${client.name}, por favor, aproxime-se. O profissional já vai te atender em instantes!`
+        `Olá ${client.name}, por favor, aproxime-se. O profissional já vai te atender em instantes!`,
+        window.location.origin + '/' + tenant.slug
       );
       showToast(`Cliente ${client.name} chamado!`, 'success');
     } else if (!import.meta.env.PROD) {
@@ -514,7 +641,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       sendPushNotification(
         client.pushId,
         'Atendimento Iniciado! ✂️',
-        `Olá ${client.name}, seu atendimento começou. Aproveite a experiência!`
+        `Olá ${client.name}, seu atendimento começou. Aproveite a experiência!`,
+        window.location.origin + '/' + tenant.slug
       );
     }
   };
@@ -545,14 +673,15 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         sendPushNotification(
           tenantData.admin_push_id,
           'Cliente a caminho! 🚗',
-          `${client?.name || 'Um cliente'} confirmou que está saindo de casa.`
+          `${client?.name || 'Um cliente'} confirmou que está saindo de casa.`,
+          window.location.origin + '/' + tenant.slug
         );
       }
     }
   };
 
-  const handleCancelMyPlace = async () => {
-    if (!myQueueItemId) return;
+  const handleCancelMyPlace = async (id: string) => {
+    if (!id) return;
     setShowLeaveModal(false);
     
     setLoading(true);
@@ -560,18 +689,19 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       const { error } = await supabase
         .from('queue_items')
         .delete()
-        .eq('id', myQueueItemId);
+        .eq('id', id);
       
       if (error) {
         showToast('Erro ao cancelar: ' + error.message, 'error');
       } else {
-        localStorage.removeItem(`suavez_customer_id_${tenant.id}`);
-        localStorage.removeItem(`suavez_in_queue_${tenant.id}`);
-        setMyQueueItemId(null);
-        showToast('Você saiu da fila.', 'info');
+        const newIds = myQueueItemIds.filter(i => i !== id);
+        setMyQueueItemIds(newIds);
+        localStorage.setItem(`suavez_customer_ids_${tenant.id}`, JSON.stringify(newIds));
+        showToast('Cancelado com sucesso.', 'info');
       }
     } finally {
       setLoading(false);
+      setItemForCancel(null);
     }
   };
   const handleLogin = (e: React.FormEvent) => {
@@ -686,8 +816,24 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
   // Format time (e.g., 14:30)
   const formatTimeISO = (isoString: string) => {
+    if (!isoString) return '';
     const date = new Date(isoString);
-    return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    // Usar o formatador para garantir que mostre o horário local corretamente
+    return date.toLocaleTimeString('pt-BR', { 
+      hour: '2-digit', 
+      minute: '2-digit',
+      hour12: false
+    });
+  };
+
+  const getISOWithOffset = (dateStr: string, timeStr: string) => {
+    const d = new Date(`${dateStr}T${timeStr}:00`);
+    const offset = -d.getTimezoneOffset();
+    const absOffset = Math.abs(offset);
+    const sign = offset >= 0 ? '+' : '-';
+    const hours = Math.floor(absOffset / 60).toString().padStart(2, '0');
+    const mins = (absOffset % 60).toString().padStart(2, '0');
+    return `${dateStr}T${timeStr}:00${sign}${hours}:${mins}`;
   };
 
   // Helper to hex to rgb
@@ -833,6 +979,14 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path><line x1="3" y1="6" x2="21" y2="6"></line><path d="M16 10a4 4 0 0 1-8 0"></path></svg>
                 Loja
               </button>
+              <button 
+                className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
+                style={{ cursor: 'pointer' }}
+                onClick={() => { setActiveTab('settings'); setIsMobileMenuOpen(false); }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                Configurações
+              </button>
             </nav>
 
             <div className="sidebar-footer">
@@ -932,28 +1086,30 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                     <div className={`sub-dot ${tenant.subscriptionStatus === 'active' ? 'active' : 'warning'}`}></div>
                     <span>Plano {tenant.subscriptionStatus === 'active' ? 'Ativo' : 'Pendente'}</span>
                   </div>
-                  <button 
-                    onClick={() => setIsAdminAddModalOpen(true)}
-                    style={{ 
-                      padding: '10px 20px', 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      justifyContent: 'center',
-                      gap: '8px',
-                      background: '#0f172a',
-                      color: '#fff',
-                      borderRadius: '12px',
-                      fontWeight: 700,
-                      fontSize: '0.85rem',
-                      border: 'none',
-                      cursor: 'pointer',
-                      flexShrink: 0,
-                      boxShadow: '0 4px 12px rgba(15, 23, 42, 0.15)'
-                    }}
-                  >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                    Novo Cliente
-                  </button>
+                  {activeTab === 'queue' && (
+                    <button 
+                      onClick={() => setIsAdminAddModalOpen(true)}
+                      style={{ 
+                        padding: '10px 20px', 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'center',
+                        gap: '8px',
+                        background: '#0f172a',
+                        color: '#fff',
+                        borderRadius: '12px',
+                        fontWeight: 700,
+                        fontSize: '0.85rem',
+                        border: 'none',
+                        cursor: 'pointer',
+                        flexShrink: 0,
+                        boxShadow: '0 4px 12px rgba(15, 23, 42, 0.15)'
+                      }}
+                    >
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                      Novo Cliente
+                    </button>
+                  )}
                </div>
             </header>
 
@@ -990,9 +1146,9 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                             required
                             style={{ width: '100%', padding: '12px', background: 'rgba(0,0,0,0.05)', border: '1px solid rgba(0,0,0,0.1)', borderRadius: '8px', color: 'var(--text-primary)' }}
                           >
-                            <option value="">Selecione...</option>
+                            <option value="" disabled hidden>Selecione um serviço...</option>
                             {tenant.services.map(s => (
-                              <option key={s.id} value={s.id}>{s.name} - R$ {s.price}</option>
+                              <option key={s.id} value={s.id}>{s.name} - R$ {s.price.toFixed(2).replace('.', ',')}</option>
                             ))}
                           </select>
                         </div>
@@ -1044,11 +1200,23 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
               ) : activeTab === 'tasks' ? (
                 <div className="fade-in">
-                  <div className="premium-card" style={{ padding: '2rem' }}>
+                  <div className="premium-card" style={{ padding: 'clamp(1rem, 5vw, 2rem)' }}>
                     <h2 style={{ marginBottom: '1.5rem', fontSize: '1.25rem' }}>Minhas Atividades</h2>
-                    <form onSubmit={handleAddTask} style={{ display: 'flex', gap: '10px', marginBottom: '2rem' }}>
-                      <input type="text" value={newTaskTitle} onChange={(e) => setNewTaskTitle(e.target.value)} placeholder="Adicione uma nova atividade..." style={{ flexGrow: 1 }} />
-                      <button type="submit" className="btn-submit" style={{ width: 'auto', padding: '0 20px', background: '#0f172a', color: '#fff' }}>Adicionar</button>
+                    <form onSubmit={handleAddTask} style={{ display: 'flex', gap: '10px', marginBottom: '2rem', flexWrap: 'wrap' }}>
+                      <input 
+                        type="text" 
+                        value={newTaskTitle} 
+                        onChange={(e) => setNewTaskTitle(e.target.value)} 
+                        placeholder="Adicione uma nova atividade..." 
+                        style={{ flex: '1 1 200px', minWidth: '0' }} 
+                      />
+                      <button 
+                        type="submit" 
+                        className="btn-submit" 
+                        style={{ width: 'auto', minWidth: '100px', flexShrink: 0, padding: '0 20px', background: '#0f172a', color: '#fff' }}
+                      >
+                        Adicionar
+                      </button>
                     </form>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -1196,6 +1364,222 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                   </div>
                 </div>
 
+              ) : activeTab === 'settings' ? (
+                <div className="fade-in">
+                  <div className="premium-card" style={{ padding: '2rem' }}>
+                    <div style={{ marginBottom: '2.5rem' }}>
+                      <h2 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Configurações de Atendimento</h2>
+                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Escolha como seus clientes devem agendar os serviços.</p>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1rem' }}>
+                      <button 
+                        onClick={() => updateBookingType('queue')}
+                        className={`glass-card ${tenant.bookingType === 'queue' ? 'active-selection' : ''}`}
+                        style={{ 
+                          padding: '2rem', 
+                          textAlign: 'left', 
+                          cursor: 'pointer', 
+                          border: tenant.bookingType === 'queue' ? '2px solid #10b981' : '1px solid rgba(255,255,255,0.05)',
+                          background: tenant.bookingType === 'queue' ? 'rgba(16,185,129,0.05)' : 'transparent',
+                          transition: 'all 0.3s ease'
+                        }}
+                      >
+                        <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: 'rgba(16,185,129,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#10b981', marginBottom: '1rem' }}>
+                          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                        </div>
+                        <h4 style={{ fontSize: '1.1rem', marginBottom: '8px', color: tenant.bookingType === 'queue' ? '#10b981' : 'var(--text-primary)' }}>Fila Virtual</h4>
+                        <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: '1.5' }}>Clientes entram em uma lista de espera por ordem de chegada. Ideal para fluxos rápidos e sem hora marcada.</p>
+                      </button>
+
+                      <button 
+                        onClick={() => updateBookingType('appointment')}
+                        className={`glass-card ${tenant.bookingType === 'appointment' ? 'active-selection' : ''}`}
+                        style={{ 
+                          padding: '2rem', 
+                          textAlign: 'left', 
+                          cursor: 'pointer', 
+                          border: tenant.bookingType === 'appointment' ? '2px solid #10b981' : '1px solid rgba(255,255,255,0.05)',
+                          background: tenant.bookingType === 'appointment' ? 'rgba(16,185,129,0.05)' : 'transparent',
+                          transition: 'all 0.3s ease'
+                        }}
+                      >
+                        <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: 'rgba(59,130,246,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#3b82f6', marginBottom: '1rem' }}>
+                          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                        </div>
+                        <h4 style={{ fontSize: '1.1rem', marginBottom: '8px', color: tenant.bookingType === 'appointment' ? '#3b82f6' : 'var(--text-primary)' }}>Horário Marcado</h4>
+                        <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: '1.5' }}>Clientes escolhem um dia e horário específico para serem atendidos. Melhora a previsibilidade e organização.</p>
+                      </button>
+                    </div>
+
+                    <div style={{ marginTop: '3rem', padding: '1.5rem', background: 'rgba(255,255,255,0.02)', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                      <h4 style={{ fontSize: '0.95rem', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#eab308" strokeWidth="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                        Nota importante
+                      </h4>
+                      <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.6' }}>
+                        Ao mudar o modelo de atendimento, as telas dos seus clientes serão atualizadas automaticamente para o novo formato. Agendamentos ou pessoas que já estão na fila permanecerão salvos.
+                      </p>
+                    </div>
+
+                    {tenant.bookingType === 'appointment' && (
+                      <div className="fade-in" style={{ marginTop: '3.5rem', paddingTop: '3.5rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                        <div style={{ marginBottom: '2.5rem' }}>
+                          <h3 style={{ fontSize: '1.5rem', fontWeight: 800, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: 'rgba(var(--accent-primary-rgb), 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-primary)' }}>
+                              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                            </div>
+                            Configuração da Agenda
+                          </h3>
+                          <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem' }}>Personalize seu fluxo de trabalho e intervalos de descanso.</p>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1.5rem', marginBottom: '2.5rem' }}>
+                          {/* Card: Tempo de Serviço */}
+                          <div className="glass-card" style={{ padding: '2rem', border: '1px solid rgba(255,255,255,0.05)', background: 'rgba(255,255,255,0.01)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '1.5rem' }}>
+                              <div style={{ color: '#3b82f6' }}>
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                              </div>
+                              <h4 style={{ fontSize: '1.1rem', fontWeight: 700, margin: 0 }}>Tempo de Atendimento</h4>
+                            </div>
+                            <div className="form-group">
+                              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                                <input 
+                                  type="number" 
+                                  className="premium-input"
+                                  value={tenant.appointmentInterval || 30} 
+                                  onChange={e => updateSchedulingSettings('appointment_interval', parseInt(e.target.value))} 
+                                  step="5" min="5" 
+                                  style={{ flex: 1, fontSize: '1.2rem', fontWeight: 700, textAlign: 'center' }}
+                                />
+                                <span style={{ fontSize: '1rem', color: 'var(--text-secondary)', fontWeight: 600 }}>minutos</span>
+                              </div>
+                              <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '1rem', lineHeight: '1.5' }}>
+                                Este é o intervalo fixo entre o início de um cliente e o próximo.
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Card: Almoço */}
+                          <div className="glass-card" style={{ padding: '2rem', border: '1px solid rgba(255,255,255,0.05)', background: 'rgba(255,255,255,0.01)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '1.5rem' }}>
+                              <div style={{ color: '#f59e0b' }}>
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8h1a4 4 0 0 1 0 8h-1"></path><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"></path><line x1="6" y1="1" x2="6" y2="4"></line><line x1="10" y1="1" x2="10" y2="4"></line><line x1="14" y1="1" x2="14" y2="4"></line></svg>
+                              </div>
+                              <h4 style={{ fontSize: '1.1rem', fontWeight: 700, margin: 0 }}>Intervalo de Almoço</h4>
+                            </div>
+                            <div className="form-group">
+                              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                                <input 
+                                  type="time" 
+                                  className="premium-input"
+                                  value={tenant.lunchStart || '12:00'} 
+                                  onChange={e => updateSchedulingSettings('lunch_start', e.target.value)} 
+                                  style={{ flex: 1, fontWeight: 600 }}
+                                />
+                                <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>às</span>
+                                <input 
+                                  type="time" 
+                                  className="premium-input"
+                                  value={tenant.lunchEnd || '13:00'} 
+                                  onChange={e => updateSchedulingSettings('lunch_end', e.target.value)} 
+                                  style={{ flex: 1, fontWeight: 600 }}
+                                />
+                              </div>
+                              <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '1rem', lineHeight: '1.5' }}>
+                                O sistema bloqueará automaticamente qualquer agendamento neste período.
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Weekly Schedule Section */}
+                        <div className="premium-card" style={{ padding: '2.5rem', background: 'rgba(255,255,255,0.015)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                          <div style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+                            <div>
+                              <h4 style={{ fontSize: '1.2rem', fontWeight: 800, margin: 0 }}>Horário de Expediente</h4>
+                              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '4px' }}>Selecione os dias e defina os horários de abertura e fechamento.</p>
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'grid', gap: '0.75rem' }}>
+                            {['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'].map((dayName, idx) => {
+                              const dayNum = idx === 6 ? 0 : idx + 1;
+                              const wh = tenant.workingHours?.find(h => h.day === dayNum);
+                              const isWorking = !!wh;
+                              
+                              return (
+                                <div key={dayNum} className={`schedule-row ${isWorking ? 'active' : 'inactive'}`} 
+                                  style={{ 
+                                    display: 'flex', 
+                                    alignItems: 'center', 
+                                    justifyContent: 'space-between',
+                                    padding: '1.25rem 2rem', 
+                                    background: isWorking ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.01)', 
+                                    borderRadius: '16px', 
+                                    border: '1px solid', 
+                                    borderColor: isWorking ? 'rgba(var(--accent-primary-rgb), 0.2)' : 'rgba(255,255,255,0.03)',
+                                    transition: 'all 0.3s ease',
+                                    flexWrap: 'wrap',
+                                    gap: '1.5rem'
+                                  }}
+                                >
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', minWidth: '160px' }}>
+                                    <label className="switch">
+                                      <input 
+                                        type="checkbox" 
+                                        checked={isWorking} 
+                                        onChange={(e) => {
+                                          if (e.target.checked) {
+                                            updateWorkingHours([...(tenant.workingHours || []), { day: dayNum, start: '08:00', end: '18:00' }].sort((a,b) => a.day - b.day));
+                                          } else {
+                                            updateWorkingHours((tenant.workingHours || []).filter(h => h.day !== dayNum));
+                                          }
+                                        }} 
+                                      />
+                                      <span className="slider round"></span>
+                                    </label>
+                                    <span style={{ fontWeight: isWorking ? 800 : 500, fontSize: '1rem', color: isWorking ? 'var(--text-primary)' : 'var(--text-secondary)' }}>{dayName}</span>
+                                  </div>
+
+                                  {isWorking && wh ? (
+                                    <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexGrow: 1, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(15, 23, 42, 0.3)', padding: '10px 18px', borderRadius: '14px', border: '1px solid rgba(255, 255, 255, 0.08)', boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.1)' }}>
+                                        <input type="time" className="time-input-minimal" value={wh.start} onChange={e => updateWorkingHours((tenant.workingHours || []).map(h => h.day === dayNum ? { ...h, start: e.target.value } : h))} />
+                                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', fontWeight: 800, letterSpacing: '1px', opacity: 0.6 }}>ATÉ</span>
+                                        <input type="time" className="time-input-minimal" value={wh.end} onChange={e => updateWorkingHours((tenant.workingHours || []).map(h => h.day === dayNum ? { ...h, end: e.target.value } : h))} />
+                                      </div>
+                                      
+                                      <button 
+                                        className="btn-minimal"
+                                        onClick={() => {
+                                          const newHours = (tenant.workingHours || []).map(h => ({ ...h, start: wh.start, end: wh.end }));
+                                          updateWorkingHours(newHours);
+                                          showToast('Horário aplicado a todos os dias ativos!', 'success');
+                                        }}
+                                        title="Aplicar este horário a todos os dias marcados"
+                                      >
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M17 2.1l4 4-4 4"/><path d="M3 12.2v-2a4 4 0 0 1 4-4h12.8M7 21.9l-4-4 4-4"/><path d="M21 11.8v2a4 4 0 0 1-4 4H4.2"/></svg>
+                                        Aplicar a todos
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-secondary)', fontSize: '0.85rem', fontStyle: 'italic', opacity: 0.6 }}>
+                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg>
+                                      Fechado para atendimentos
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
               ) : (
                 <div className="admin-dashboard-container">
                   <div className="admin-stats-row">
@@ -1226,20 +1610,29 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                           </div>
                           <div className="item-actions">
                             {item.status === 'serving' ? (
-                              <button onClick={() => handleCompleteService(item.id)} className="action-btn complete">
+                              <button onClick={() => handleCompleteService(item.id)} className="action-btn complete" style={{ background: '#10b981', color: '#fff', border: 'none', padding: '10px 18px', borderRadius: '10px', fontWeight: 700, fontSize: '0.85rem' }}>
                                 Concluir
                               </button>
-                            ) : item.status === 'ready' ? (
-                              <button onClick={() => handleStartService(item.id)} className="action-btn start">
-                                Iniciar Atendimento
-                              </button>
                             ) : (
-                              <button onClick={() => handleCallClient(item.id)} className="action-btn call" style={{ background: 'var(--accent-primary)', color: '#000' }}>
-                                Chamar Cliente
-                              </button>
+                              <>
+                                <button 
+                                  onClick={() => handleCallClient(item.id)} 
+                                  className="action-btn call" 
+                                  style={{ background: item.status === 'ready' ? '#f1f5f9' : 'var(--accent-primary)', color: item.status === 'ready' ? '#64748b' : '#000', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 700, fontSize: '0.8rem', cursor: 'pointer' }}
+                                >
+                                  {item.status === 'ready' ? 'Chamado ✓' : 'Chamar'}
+                                </button>
+                                <button 
+                                  onClick={() => handleStartService(item.id)} 
+                                  className="action-btn start" 
+                                  style={{ background: '#0f172a', color: '#fff', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 700, fontSize: '0.8rem', cursor: 'pointer' }}
+                                >
+                                  Atender
+                                </button>
+                              </>
                             )}
-                            <button onClick={() => handleRemoveFromQueue(item.id)} className="btn-action-remove">✕</button>
                           </div>
+                          <button onClick={() => handleRemoveFromQueue(item.id)} className="btn-action-remove">✕</button>
                         </div>
                       ))}
                     </div>
@@ -1292,7 +1685,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
               <div className="hero-stats">
                  <div className="client-hero-actions">
-                   {!amIInQueue && tenant.isOnline && (
+                   {myItemsInQueue.length === 0 && tenant.isOnline && (
                      <button 
                        onClick={() => document.querySelector('.form-panel')?.scrollIntoView({ behavior: 'smooth' })}
                        className="hero-cta-button"
@@ -1334,13 +1727,6 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
               </div>
               <div className="status-icon-glow"></div>
             </div>
-            <div className="status-summary-card total">
-              <div className="status-info">
-                <span className="status-value">{totalCount}</span>
-                <span className="status-label">Total Hoje</span>
-              </div>
-              <div className="status-icon-glow"></div>
-            </div>
           </div>
 
           <main className="main-content">
@@ -1354,57 +1740,112 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                   <h2 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>Loja Fechada</h2>
                   <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Volte em nosso horário de funcionamento!</p>
                 </div>
-              ) : amIInQueue ? (
-                <div className="active-presence-card fade-in">
-                  <h2 style={{ marginBottom: '1.5rem', textAlign: 'center' }}>Sua presença confirmada!</h2>
-                  <div className="my-status-monitor fade-in">
-                    <div className="monitor-glow"></div>
-                    <div className="monitor-content">
-                      <p className="monitor-label">Posição Atual</p>
-                      <div className="monitor-value">{queue.findIndex(item => item.id === amIInQueue?.id) + 1}º</div>
-                      <p className="monitor-subtext">Você é o próximo!</p>
-                    </div>
-                    <div className="monitor-footer">
-                      <div className="live-indicator"><span className="live-dot"></span>AO VIVO</div>
-                    </div>
-                  </div>
+              ) : (myItemsInQueue.length > 0 && !forceShowJoinForm) ? (
+                <div className="active-presence-container fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                  <h2 style={{ marginBottom: '1.5rem', textAlign: 'center', color: 'var(--text-primary)' }}>Presenças Confirmadas ({myItemsInQueue.length})</h2>
+                  
+                  {myItemsInQueue.map(item => (
+                    <div key={item.id} className="active-presence-card" style={{ background: 'rgba(255,255,255,0.02)', padding: '1.5rem', borderRadius: '24px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                        <div style={{ flex: 1 }}>
+                          <h3 style={{ margin: 0, fontSize: '1.2rem', color: 'var(--text-primary)' }}>{item.name}</h3>
+                          <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{item.serviceName}</span>
+                        </div>
+                        <span className={`status-badge ${item.status}`} style={{ fontSize: '0.7rem' }}>
+                          {item.status === 'serving' ? 'Atendendo' : item.status === 'ready' ? 'Sua Vez!' : 'Na Fila'}
+                        </span>
+                      </div>
 
-                  {(() => {
-                    const waitingItems = queue.filter(q => q.status === 'waiting');
-                    const myWaitIndex = waitingItems.findIndex(q => q.id === amIInQueue?.id);
-                    
-                    // Mostrar se for o 1º ou 2º da fila de espera
-                    if (myWaitIndex >= 0 && myWaitIndex < 2) {
-                      if (amIInQueue?.isOnWay) {
-                        return (
-                          <div className="fade-in" style={{ marginTop: '1.5rem', padding: '16px', background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.2)', color: '#10b981', borderRadius: '16px', textAlign: 'center', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
-                            Profissional avisado que você está a caminho!
+                      <div className="my-status-monitor fade-in" style={{ marginBottom: '1rem' }}>
+                        <div className="monitor-glow"></div>
+                        <div className="monitor-content">
+                          <p className="monitor-label">Posição Atual</p>
+                          <div className="monitor-value">{queue.findIndex(q => q.id === item.id) + 1}º</div>
+                          <p className="monitor-subtext">
+                            {queue.findIndex(q => q.id === item.id) === 0 ? 'Próximo da fila!' : 'Aguarde sua vez'}
+                          </p>
+                        </div>
+                        <div className="monitor-footer">
+                          <div className="live-indicator"><span className="live-dot"></span>AO VIVO</div>
+                          <div 
+                            onClick={() => requestNotificationPermission()}
+                            style={{ 
+                              fontSize: '0.65rem', 
+                              display: 'flex', 
+                              alignItems: 'center', 
+                              gap: '4px', 
+                              color: notifsEnabled ? '#10b981' : '#ef4444',
+                              cursor: 'pointer',
+                              fontWeight: 600
+                            }}
+                          >
+                            <div style={{ width: '5px', height: '5px', borderRadius: '50%', background: 'currentColor' }}></div>
+                            {notifsEnabled ? 'NOTIFICAÇÕES ATIVAS' : 'NOTIFICAÇÕES DESATIVADAS'}
                           </div>
-                        );
-                      } else {
-                        return (
-                          <div className="fade-in" style={{ marginTop: '1.5rem' }}>
-                            <button 
-                              onClick={() => handleConfirmOnWay(amIInQueue!.id)} 
-                              className="btn-submit" 
-                              disabled={loading}
-                              style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', background: '#3b82f6', color: '#fff' }}
-                            >
-                              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 22h14"></path><path d="m5 12 7-7 7 7"></path><path d="M12 15v7"></path></svg>
-                              Você está a caminho? Confirme presença
-                            </button>
-                          </div>
-                        );
-                      }
-                    }
-                    return null;
-                  })()}
+                        </div>
+                      </div>
 
-                  <div style={{ marginTop: '2rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                    <button onClick={() => window.open(`https://wa.me/${tenant.whatsapp?.replace(/\D/g, '')}`)} className="hero-cta-button" style={{ background: '#25D366' }}>Falar no WhatsApp</button>
-                    <button onClick={() => setShowLeaveModal(true)} className="btn-secondary">Sair da Fila</button>
-                  </div>
+                      {(() => {
+                        const waitingItems = queue.filter(q => q.status === 'waiting');
+                        const myWaitIndex = waitingItems.findIndex(q => q.id === item.id);
+                        
+                        if (myWaitIndex >= 0 && myWaitIndex < 2) {
+                          if (item.isOnWay) {
+                            return (
+                              <div className="fade-in" style={{ padding: '12px', background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.2)', color: '#10b981', borderRadius: '12px', textAlign: 'center', fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                                Profissional avisado!
+                              </div>
+                            );
+                          } else if (item.status === 'waiting') {
+                            return (
+                              <button 
+                                onClick={() => handleConfirmOnWay(item.id)} 
+                                className="btn-submit" 
+                                disabled={loading}
+                                style={{ width: '100%', height: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', background: '#3b82f6', color: '#fff', fontSize: '0.85rem' }}
+                              >
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 22h14"></path><path d="m5 12 7-7 7 7"></path><path d="M12 15v7"></path></svg>
+                                Estou a caminho
+                              </button>
+                            );
+                          }
+                        }
+                        return null;
+                      })()}
+
+                      <div style={{ marginTop: '1rem', display: 'flex', gap: '0.75rem' }}>
+                        {item.status !== 'serving' && (
+                          <button 
+                            onClick={() => { setItemForCancel(item); setShowLeaveModal(true); }} 
+                            className="btn-secondary"
+                            style={{ flex: 1, height: '44px', fontSize: '0.85rem' }}
+                          >
+                            Remover
+                          </button>
+                        )}
+                        <button 
+                          onClick={() => window.open(`https://wa.me/${tenant.whatsapp?.replace(/\D/g, '')}`)} 
+                          className="hero-cta-button" 
+                          style={{ flex: 1, height: '44px', fontSize: '0.85rem', background: '#25D366' }}
+                        >
+                          WhatsApp
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                  <button 
+                    onClick={() => {
+                      setForceShowJoinForm(true);
+                      setName('');
+                      setCustomerWhatsapp('');
+                    }} 
+                    className="btn-submit"
+                    style={{ background: 'var(--accent-primary)', color: '#000', marginTop: '1rem' }}
+                  >
+                    + Adicionar Outra Pessoa
+                  </button>
                 </div>
               ) : (
                 <form onSubmit={handleJoinQueue} className="join-form">
@@ -1426,54 +1867,102 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                   </div>
                   <div className="form-group">
                     <label>Serviço</label>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '1rem' }}>
-                      {tenant.services.map(s => (
-                        <button key={s.id} type="button" onClick={() => setSelectedServiceId(s.id)} className={`service-selection-card ${selectedServiceId === s.id ? 'active' : ''}`} style={{ padding: '1rem', borderRadius: '12px', border: '1px solid color-mix(in srgb, var(--accent-primary) 20%, #e2e8f0)', background: selectedServiceId === s.id ? 'rgba(var(--accent-primary-rgb), 0.1)' : 'var(--bg-surface)', color: 'var(--text-primary)' }}>
-                          {s.name}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  {(import.meta.env.PROD && !notifsEnabled) ? (
-                    <div style={{ marginTop: '1.5rem', padding: '1.5rem', background: 'rgba(239, 68, 68, 0.05)', borderRadius: '16px', border: '1px dashed #ef4444', textAlign: 'center' }}>
-                      <p style={{ fontSize: '0.9rem', color: '#ef4444', marginBottom: '1rem', fontWeight: 600 }}>
-                        ⚠️ Notificações Necessárias
-                      </p>
+                    <div className="service-selector-simple">
+                      <button 
+                        type="button" 
+                        className={`selector-trigger ${isServiceListOpen ? 'open' : ''}`}
+                        onClick={() => setIsServiceListOpen(!isServiceListOpen)}
+                      >
+                        <span>{tenant.services.find(s => s.id === selectedServiceId)?.name || 'Selecione um serviço'}</span>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                      </button>
                       
-                      { (typeof Notification !== 'undefined' && Notification.permission === 'denied') ? (
-                        <>
-                          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-                            Você **bloqueou** as notificações. Para entrar na fila:
-                          </p>
-                          <ol style={{ fontSize: '0.8rem', color: 'var(--text-primary)', textAlign: 'left', marginBottom: '1.5rem', paddingLeft: '20px' }}>
-                            <li>Clique no ícone de 🔒 (Cadeado) na barra de endereços lá em cima.</li>
-                            <li>Ative a chave de <b>Notificações</b>.</li>
-                            <li>Recarregue a página.</li>
-                          </ol>
-                        </>
-                      ) : (
-                        <>
-                          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
-                            Para entrar na fila e receber o aviso de que sua vez chegou, você precisa ativar as notificações abaixo.
-                          </p>
-                          <button 
-                            type="button" 
-                            onClick={() => {
-                              console.log('Solicitando permissão...');
-                              requestNotificationPermission();
-                            }}
-                            className="btn-submit" 
-                            style={{ background: '#0f172a', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}
-                          >
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
-                            Ativar Notificações Agora
-                          </button>
-                        </>
+                      {isServiceListOpen && (
+                        <div className="simple-vertical-list fade-in">
+                          {tenant.services.map(s => (
+                            <button 
+                              key={s.id} 
+                              type="button" 
+                              className={`simple-list-item ${selectedServiceId === s.id ? 'active' : ''}`}
+                              onClick={() => {
+                                setSelectedServiceId(s.id);
+                                setIsServiceListOpen(false);
+                              }}
+                            >
+                              <span className="svc-name">{s.name}</span>
+                              <span className="svc-price">R$ {s.price.toFixed(2).replace('.', ',')}</span>
+                            </button>
+                          ))}
+                        </div>
                       )}
                     </div>
-                  ) : (
-                    <button type="submit" className="btn-submit" style={{ marginTop: '1rem' }} disabled={loading}>
-                      {loading ? 'Aguarde...' : 'Confirmar'}
+                  </div>
+
+                  {tenant.bookingType === 'appointment' && (
+                    <div className="fade-in" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '1.5rem' }}>
+                      <div className="form-group">
+                        <label>Data</label>
+                        <input 
+                          type="date" 
+                          value={selectedDate} 
+                          min={new Date().toISOString().split('T')[0]}
+                          onChange={(e) => {
+                            setSelectedDate(e.target.value);
+                            setSelectedTimeSlot('');
+                          }} 
+                          required 
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>Horário</label>
+                        <select 
+                          value={selectedTimeSlot} 
+                          onChange={(e) => setSelectedTimeSlot(e.target.value)} 
+                          required
+                          className="premium-select"
+                        >
+                          <option value="">Selecione</option>
+                          {generateTimeSlots().map(slot => (
+                            <option key={slot} value={slot}>{slot}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Notification Recommendation (Non-blocking) */}
+                  {import.meta.env.PROD && !notifsEnabled && (
+                    <div style={{ marginTop: '1.5rem', padding: '1.25rem', background: 'rgba(var(--accent-primary-rgb), 0.05)', borderRadius: '16px', border: '1px solid rgba(var(--accent-primary-rgb), 0.1)', textAlign: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', justifyContent: 'center', marginBottom: '0.75rem', color: 'var(--accent-primary)' }}>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+                        <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>Ative as Notificações</span>
+                      </div>
+                      <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1rem', lineHeight: '1.4' }}>
+                        Para receber avisos em tempo real e não perder sua vez, recomendamos ativar as notificações abaixo.
+                      </p>
+                      <button 
+                        type="button" 
+                        onClick={() => requestNotificationPermission()}
+                        className="btn-secondary" 
+                        style={{ width: '100%', fontSize: '0.85rem', padding: '10px', background: 'white' }}
+                      >
+                        Ativar Agora
+                      </button>
+                    </div>
+                  )}
+
+                  <button type="submit" className="btn-submit" style={{ marginTop: '1.5rem' }} disabled={loading}>
+                    {loading ? 'Aguarde...' : 'Confirmar'}
+                  </button>
+                  
+                  {myItemsInQueue.length > 0 && (
+                    <button 
+                      type="button" 
+                      onClick={() => setForceShowJoinForm(false)} 
+                      className="btn-secondary"
+                      style={{ width: '100%', marginTop: '0.75rem' }}
+                    >
+                      Voltar para meus agendamentos
                     </button>
                   )}
                 </form>
@@ -1488,7 +1977,9 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
               <div className="queue-list" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                 {queue.map((item, index) => (
                   <div key={item.id} className={`queue-item glass-card ${item.status}`} style={{ padding: '1.25rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 800, opacity: 0.3 }}>{index + 1}º</div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 800, opacity: 0.6, minWidth: '60px', color: item.status === 'ready' ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>
+                      {tenant.bookingType === 'appointment' && item.appointmentTime ? formatTimeISO(item.appointmentTime) : `${index + 1}º`}
+                    </div>
                     <div style={{ flexGrow: 1 }}>
                       <h4 style={{ color: 'var(--text-primary)' }}>{item.name}</h4>
                       <span style={{ fontSize: '0.8rem', opacity: 0.6 }}>{item.serviceName}</span>
@@ -1508,12 +1999,46 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       {showConfirmation && (
         <div className="modal-overlay" style={{ zIndex: 10000 }}>
           <div className="modal-content glass-panel fade-in" style={{ maxWidth: '400px', textAlign: 'center', background: 'var(--bg-surface)' }}>
-            <div style={{ width: '64px', height: '64px', background: 'var(--success)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem' }}>
+            <div style={{ width: '64px', height: '64px', background: '#10b981', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem' }}>
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
             </div>
             <h3 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>Sucesso!</h3>
             <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem' }}>Seu lugar na fila foi reservado com sucesso.</p>
             <button onClick={() => setShowConfirmation(false)} className="btn-submit">Entendi</button>
+          </div>
+        </div>
+      )}
+
+      {/* Join Queue Confirmation Modal */}
+      {showJoinConfirmation && (
+        <div className="modal-overlay" style={{ zIndex: 10001 }}>
+          <div className="modal-content glass-panel fade-in" style={{ maxWidth: '400px', textAlign: 'center', background: 'var(--bg-surface)' }}>
+            <h3 style={{ fontSize: '1.5rem', marginBottom: '1rem' }}>Confirmar Presença</h3>
+            <div style={{ background: 'rgba(var(--accent-primary-rgb), 0.05)', padding: '1.5rem', borderRadius: '16px', marginBottom: '1.5rem', border: '1px solid rgba(var(--accent-primary-rgb), 0.1)' }}>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '0.5rem' }}>Você está solicitando:</p>
+              <h4 style={{ fontSize: '1.2rem', color: 'var(--text-primary)', marginBottom: '4px' }}>
+                {tenant.services.find(s => s.id === selectedServiceId)?.name}
+              </h4>
+              <p style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--accent-primary)' }}>
+                R$ {tenant.services.find(s => s.id === selectedServiceId)?.price.toFixed(2).replace('.', ',')}
+              </p>
+            </div>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem', fontSize: '0.9rem' }}>
+              Deseja entrar na fila agora?
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <button 
+                onClick={async () => {
+                  setShowJoinConfirmation(false);
+                  if (import.meta.env.PROD) requestNotificationPermission();
+                  await confirmJoinQueue();
+                }} 
+                className="btn-submit"
+              >
+                Confirmar e Entrar
+              </button>
+              <button onClick={() => setShowJoinConfirmation(false)} className="btn-secondary">Cancelar</button>
+            </div>
           </div>
         </div>
       )}
@@ -1525,24 +2050,24 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
             <div style={{ width: '64px', height: '64px', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem', color: '#ef4444' }}>
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path><line x1="12" y1="2" x2="12" y2="12"></line></svg>
             </div>
-            <h3 style={{ fontSize: '1.5rem', marginBottom: '0.75rem', color: 'var(--text-primary)' }}>Sair da Fila?</h3>
+            <h3 style={{ fontSize: '1.5rem', marginBottom: '0.75rem', color: 'var(--text-primary)' }}>Remover {itemForCancel?.name}?</h3>
             <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem', fontSize: '0.95rem', lineHeight: '1.5' }}>
-              Você perderá sua posição atual e precisará entrar novamente se mudar de ideia.
+              Esta pessoa será removida da fila e perderá a posição atual.
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <button 
-                onClick={handleCancelMyPlace} 
+                onClick={() => handleCancelMyPlace(itemForCancel?.id || '')} 
                 className="btn-submit" 
                 style={{ background: '#ef4444', color: '#fff', border: 'none' }}
               >
-                Sim, desejo sair
+                Sim, desejo remover
               </button>
               <button 
-                onClick={() => setShowLeaveModal(false)} 
+                onClick={() => { setShowLeaveModal(false); setItemForCancel(null); }} 
                 className="btn-secondary" 
                 style={{ border: '1px solid rgba(0,0,0,0.1)', width: '100%' }}
               >
-                Continuar na fila
+                Manter na fila
               </button>
             </div>
           </div>

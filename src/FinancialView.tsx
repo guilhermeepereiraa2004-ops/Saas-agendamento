@@ -26,6 +26,10 @@ export default function FinancialView({ tenantId }: Props) {
   const [loading, setLoading] = useState(true);
   const [expenseDescription, setExpenseDescription] = useState('');
   const [expenseAmount, setExpenseAmount] = useState('');
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
 
   useEffect(() => {
     const fetchData = async () => {
@@ -113,6 +117,16 @@ export default function FinancialView({ tenantId }: Props) {
   const totalExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
   const netProfit = totalRevenue - totalExpenses;
 
+  const monthRevenue = records
+    .filter(r => r.completed_at.startsWith(selectedMonth))
+    .reduce((sum, r) => sum + Number(r.price), 0);
+
+  const monthExpenses = expenses
+    .filter(e => e.created_at.startsWith(selectedMonth))
+    .reduce((sum, e) => sum + e.amount, 0);
+
+  const monthNet = monthRevenue - monthExpenses;
+
   // Group by month
   const monthlyMap: Record<string, { total: number; count: number }> = {};
   records.forEach(r => {
@@ -143,52 +157,95 @@ export default function FinancialView({ tenantId }: Props) {
 
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '2rem', padding: '0.5rem 0' }}>
+      
+      {/* Month Selector */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+        <div>
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-primary)' }}>Resumo Financeiro</h2>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Acompanhe seu faturamento e despesas</p>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Mês de Referência:</span>
+          <select 
+            value={selectedMonth} 
+            onChange={(e) => setSelectedMonth(e.target.value)}
+            style={{ 
+              padding: '8px 16px', 
+              borderRadius: '10px', 
+              border: '1px solid #e2e8f0', 
+              background: '#fff', 
+              fontWeight: 700,
+              cursor: 'pointer',
+              color: '#0f172a'
+            }}
+          >
+            {/* Generate months from records and expenses */}
+            {(() => {
+              const availableMonths = new Set<string>();
+              records.forEach(r => availableMonths.add(r.completed_at.slice(0, 7)));
+              expenses.forEach(e => availableMonths.add(e.created_at.slice(0, 7)));
+              // Add current month if not there
+              const now = new Date();
+              availableMonths.add(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`);
+              
+              return Array.from(availableMonths)
+                .sort((a, b) => b.localeCompare(a))
+                .map(m => (
+                  <option key={m} value={m}>{formatMonth(m)}</option>
+                ));
+            })()}
+          </select>
+        </div>
+      </div>
 
-      {/* Today's Summary */}
-      <div className="admin-stats-row" style={{ display: 'grid', gap: '1.5rem', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
-        <div className="admin-stat-card" style={{ position: 'relative', overflow: 'hidden' }}>
-          <div style={{ position: 'absolute', top: '-10px', right: '-10px', opacity: 0.05, color: 'var(--success)' }}>
-             <svg width="100" height="100" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
-          </div>
+      {/* Stats Summary */}
+      <div className="admin-stats-row" style={{ display: 'grid', gap: '1rem', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+        <div className="admin-stat-card" style={{ position: 'relative', overflow: 'hidden', borderLeft: '4px solid var(--success)' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--success)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>
               Faturamento Hoje
             </div>
-            <div style={{ fontSize: '2.5rem', fontWeight: 900, color: 'var(--text-primary)' }}>
+            <div style={{ fontSize: '1.8rem', fontWeight: 900, color: 'var(--text-primary)' }}>
               {formatCurrency(todayTotal)}
             </div>
           </div>
         </div>
 
-        <div className="admin-stat-card" style={{ position: 'relative', overflow: 'hidden' }}>
-          <div style={{ position: 'absolute', top: '-10px', right: '-10px', opacity: 0.05, color: 'var(--danger)' }}>
-             <svg width="100" height="100" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
-          </div>
+        <div className="admin-stat-card" style={{ position: 'relative', overflow: 'hidden', borderLeft: '4px solid #3b82f6' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6"></path></svg>
-              Saídas Hoje
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>
+              Faturamento Mensal
             </div>
-            <div style={{ fontSize: '2.5rem', fontWeight: 900, color: 'var(--danger)' }}>
-              {formatCurrency(todayExpenses)}
+            <div style={{ fontSize: '1.8rem', fontWeight: 900, color: '#3b82f6' }}>
+              {formatCurrency(monthRevenue)}
             </div>
           </div>
         </div>
 
-        <div className="admin-stat-card" style={{ position: 'relative', overflow: 'hidden', background: 'var(--text-primary)' }}>
+        <div className="admin-stat-card" style={{ position: 'relative', overflow: 'hidden', borderLeft: '4px solid var(--danger)' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', color: 'var(--bg-surface-elevated)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>
-              Saldo Líquido Total
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>
+              Saídas Mensais
             </div>
-            <div style={{ fontSize: '2.5rem', fontWeight: 900, color: '#fff' }}>
-              {formatCurrency(netProfit)}
+            <div style={{ fontSize: '1.8rem', fontWeight: 900, color: 'var(--danger)' }}>
+              {formatCurrency(monthExpenses)}
+            </div>
+          </div>
+        </div>
+
+        <div className="admin-stat-card" style={{ position: 'relative', overflow: 'hidden', borderLeft: '4px solid #000', background: 'rgba(0,0,0,0.02)' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>
+              Líquido no Mês
+            </div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 900, color: monthNet >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+              {formatCurrency(monthNet)}
             </div>
           </div>
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
+      <div className="financial-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
         {/* Monthly Breakdown */}
         <div className="admin-stat-card">
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '2rem' }}>
@@ -236,22 +293,26 @@ export default function FinancialView({ tenantId }: Props) {
             </h3>
           </div>
 
-          <form onSubmit={handleAddExpense} style={{ display: 'flex', gap: '10px', marginBottom: '2rem' }}>
-            <input 
-              type="text" 
-              placeholder="Descrição (ex: Aluguel)" 
-              value={expenseDescription}
-              onChange={e => setExpenseDescription(e.target.value)}
-              style={{ flexGrow: 2 }}
-            />
-            <input 
-              type="text" 
-              placeholder="R$ 0,00" 
-              value={expenseAmount}
-              onChange={e => setExpenseAmount(e.target.value)}
-              style={{ flexGrow: 1 }}
-            />
-            <button type="submit" className="btn-submit" style={{ width: 'auto', padding: '0 20px', background: 'var(--danger)', color: '#fff' }}>Lançar</button>
+          <form onSubmit={handleAddExpense} style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '2rem' }}>
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              <input 
+                type="text" 
+                placeholder="Descrição (ex: Aluguel)" 
+                value={expenseDescription}
+                onChange={e => setExpenseDescription(e.target.value)}
+                style={{ flex: '1 1 200px' }}
+              />
+              <div style={{ display: 'flex', gap: '10px', flex: '1 1 200px' }}>
+                <input 
+                  type="text" 
+                  placeholder="R$ 0,00" 
+                  value={expenseAmount}
+                  onChange={e => setExpenseAmount(e.target.value)}
+                  style={{ flexGrow: 1, minWidth: '80px' }}
+                />
+                <button type="submit" className="btn-submit" style={{ width: 'auto', minWidth: '100px', flexShrink: 0, padding: '0 20px', background: 'var(--danger)', color: '#fff' }}>Lançar</button>
+              </div>
+            </div>
           </form>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>

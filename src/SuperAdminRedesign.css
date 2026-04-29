@@ -429,7 +429,77 @@
     border-radius: 0;
     border-left: none;
     border-right: none;
-    overflow-x: auto;
+    overflow-x: hidden;
+    background: transparent;
+    border: none;
+  }
+
+  .premium-table, 
+  .premium-table tbody, 
+  .premium-table tr, 
+  .premium-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .premium-table thead {
+    display: none;
+  }
+
+  .premium-table tr {
+    background: white;
+    margin-bottom: 1rem;
+    padding: 1.25rem;
+    border-radius: 16px;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+  }
+
+  .premium-table td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid #f1f5f9;
+    text-align: right;
+  }
+
+  .premium-table td:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+    margin-top: 0.5rem;
+  }
+
+  .premium-table td::before {
+    content: attr(data-label);
+    font-weight: 700;
+    font-size: 0.7rem;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .stat-card .stat-value {
+    font-size: 1.25rem;
+  }
+
+  .premium-table td[data-label="Ações"] {
+    justify-content: flex-end;
+  }
+
+  .premium-table td[data-label="Ações"] button {
+    width: auto !important;
+    min-width: unset !important;
+    flex: none !important;
+    padding: 8px 16px !important;
+    font-size: 0.75rem !important;
+  }
+
+  .admin-credential-box {
+    padding: 1.25rem !important;
+    margin-left: -0.25rem;
+    margin-right: -0.25rem;
+    border-radius: 16px !important;
   }
 }
 

@@ -465,12 +465,12 @@ export default function SuperAdmin() {
                   Voltar para lista
                 </button>
 
-                <form onSubmit={handleSubmit} className="premium-card" style={{ padding: '2.5rem', marginBottom: '2.5rem' }}>
+                <form onSubmit={handleSubmit} className="premium-card" style={{ padding: 'clamp(1rem, 5vw, 2.5rem)', marginBottom: '2.5rem' }}>
                   <h2 style={{ marginBottom: '2rem', fontSize: '1.5rem' }}>
                     {editingTenantId ? 'Editar Estabelecimento' : 'Novo Cadastro'}
                   </h2>
                   
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem' }}>
                     <div className="form-group">
                       <label>Nome do Estabelecimento</label>
                       <input type="text" value={name} onChange={e => handleNameChange(e.target.value)} required placeholder="Ex: Barbearia do João" />
@@ -485,7 +485,7 @@ export default function SuperAdmin() {
                     </div>
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginTop: '1.5rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem', marginTop: '1.5rem' }}>
                     <div className="form-group">
                       <label>WhatsApp de Contato</label>
                       <input type="text" value={whatsapp} onChange={handlePhoneChange} maxLength={15} placeholder="(00) 00000-0000" />
@@ -517,7 +517,7 @@ export default function SuperAdmin() {
                         <p style={{ fontSize: '0.8rem', color: '#64748b', margin: '4px 0 0 0' }}>Credenciais para o painel do {PROFESSION_CONFIG[profession].professional.toLowerCase()}</p>
                       </div>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem' }}>
                       <div className="form-group" style={{ margin: 0 }}>
                         <label>E-mail de Login</label>
                         <input type="email" value={loginEmail} onChange={e => setLoginEmail(e.target.value)} required placeholder="admin@exemplo.com" />
@@ -530,7 +530,7 @@ export default function SuperAdmin() {
                   </div>
 
                   {/* Visual & Configuration */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginTop: '2rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem', marginTop: '2rem' }}>
                     <div className="form-group">
                       <label>Identidade Visual (Logo)</label>
                       <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem' }}>
@@ -564,30 +564,8 @@ export default function SuperAdmin() {
                     </div>
                   </div>
 
-                  {/* Atendimento Modelo */}
+                  {/* Working Hours Setup (SaaS manager sets initial) */}
                   <div style={{ marginTop: '2rem', paddingTop: '2rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-                    <h3 style={{ marginBottom: '1.25rem', fontSize: '1.1rem' }}>Modelo de Atendimento</h3>
-                    <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem' }}>
-                      <button 
-                        type="button" 
-                        onClick={() => setBookingType('queue')}
-                        className={`btn-premium ${bookingType === 'queue' ? 'btn-premium-primary' : 'btn-premium-secondary'}`}
-                        style={{ flex: 1, height: '60px' }}
-                      >
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '8px' }}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-                        Fila Virtual (Ordem de Chegada)
-                      </button>
-                      <button 
-                        type="button" 
-                        onClick={() => setBookingType('appointment')}
-                        className={`btn-premium ${bookingType === 'appointment' ? 'btn-premium-primary' : 'btn-premium-secondary'}`}
-                        style={{ flex: 1, height: '60px' }}
-                      >
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '8px' }}><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
-                        Horário Marcado (Agenda)
-                      </button>
-                    </div>
-
                     {bookingType === 'appointment' && (
                       <div className="fade-in" style={{ background: 'rgba(255,255,255,0.015)', padding: '2rem', borderRadius: '20px', border: '1px solid rgba(255,255,255,0.04)' }}>
                         <h4 style={{ marginBottom: '1.5rem', fontSize: '1rem', fontWeight: 600 }}>Configurar Horários da Semana</h4>
@@ -646,25 +624,34 @@ export default function SuperAdmin() {
                     
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                       {services.map((service) => (
-                        <div key={service.id} className="fade-in" style={{ display: 'flex', gap: '1rem', background: 'rgba(255,255,255,0.01)', padding: '12px', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.03)' }}>
-                          <div style={{ flex: 3 }}>
+                        <div key={service.id} className="fade-in" style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', background: 'rgba(255,255,255,0.01)', padding: '12px', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.03)', alignItems: 'center' }}>
+                          <div style={{ flex: '1 1 250px' }}>
+                            <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '4px', display: 'block' }}>Nome do Serviço</label>
                             <input type="text" value={service.name} onChange={e => updateService(service.id, 'name', e.target.value)} placeholder="Nome do serviço (Ex: Corte Masculino)" required />
                           </div>
-                          <div style={{ flex: 1, position: 'relative' }}>
-                            <span style={{ position: 'absolute', left: '16px', top: '14px', color: 'var(--text-secondary)', fontWeight: 600 }}>R$</span>
-                            <input type="number" value={service.price || ''} onChange={e => updateService(service.id, 'price', parseFloat(e.target.value))} placeholder="0.00" style={{ paddingLeft: '45px' }} required min="0" step="0.01" />
+                          <div style={{ flex: '1 1 120px', position: 'relative' }}>
+                            <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '4px', display: 'block' }}>Preço</label>
+                            <div style={{ position: 'relative' }}>
+                              <span style={{ position: 'absolute', left: '16px', top: '14px', color: 'var(--text-secondary)', fontWeight: 600 }}>R$</span>
+                              <input type="number" value={service.price || ''} onChange={e => updateService(service.id, 'price', parseFloat(e.target.value))} placeholder="0.00" style={{ paddingLeft: '45px' }} required min="0" step="0.01" />
+                            </div>
                           </div>
                           {bookingType === 'appointment' && (
-                            <div style={{ flex: 1, position: 'relative' }}>
-                              <span style={{ position: 'absolute', right: '16px', top: '14px', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>min</span>
-                              <input type="number" value={service.duration || ''} onChange={e => updateService(service.id, 'duration', parseInt(e.target.value))} placeholder="30" style={{ paddingRight: '45px' }} required={bookingType === 'appointment'} min="5" step="5" />
+                            <div style={{ flex: '1 1 120px', position: 'relative' }}>
+                              <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '4px', display: 'block' }}>Duração</label>
+                              <div style={{ position: 'relative' }}>
+                                <span style={{ position: 'absolute', right: '16px', top: '14px', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>min</span>
+                                <input type="number" value={service.duration || ''} onChange={e => updateService(service.id, 'duration', parseInt(e.target.value))} placeholder="30" style={{ paddingRight: '45px' }} required={bookingType === 'appointment'} min="5" step="5" />
+                              </div>
                             </div>
                           )}
-                          {services.length > 1 && (
-                            <button type="button" onClick={() => removeService(service.id)} className="btn-premium-danger" style={{ width: '48px', padding: 0, borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-                            </button>
-                          )}
+                          <div style={{ flex: '0 0 auto', alignSelf: 'flex-end', marginBottom: '4px' }}>
+                            {services.length > 1 && (
+                              <button type="button" onClick={() => removeService(service.id)} className="btn-premium-danger" style={{ width: '48px', height: '48px', padding: 0, borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                              </button>
+                            )}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -694,9 +681,9 @@ export default function SuperAdmin() {
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '3rem' }}>
-                    <button type="button" onClick={resetForm} className="btn-premium btn-premium-secondary" style={{ padding: '14px 30px' }}>Descartar</button>
-                    <button type="submit" className="btn-premium btn-premium-primary" disabled={loading} style={{ padding: '14px 50px', minWidth: '180px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '3rem', flexWrap: 'wrap' }}>
+                    <button type="button" onClick={resetForm} className="btn-premium btn-premium-secondary" style={{ padding: '14px 30px', flex: '1 1 120px' }}>Descartar</button>
+                    <button type="submit" className="btn-premium btn-premium-primary" disabled={loading} style={{ padding: '14px 30px', flex: '2 1 200px', minWidth: '180px' }}>
                       {loading ? 'Salvando...' : 'Finalizar Cadastro'}
                     </button>
                   </div>
@@ -884,18 +871,18 @@ export default function SuperAdmin() {
                 <tbody>
                   {tenants.map(tenant => (
                     <tr key={tenant.id}>
-                      <td>
+                      <td data-label="Estabelecimento">
                         <div style={{ fontWeight: 700 }}>{tenant.name}</div>
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>/{tenant.slug}</div>
                       </td>
-                      <td style={{ fontWeight: 600 }}>R$ {tenant.monthlyFee?.toFixed(2)}</td>
-                      <td>
+                      <td data-label="Valor" style={{ fontWeight: 600 }}>R$ {tenant.monthlyFee?.toFixed(2)}</td>
+                      <td data-label="Vencimento">
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
                           Dia {tenant.paymentDay || 10}
                         </div>
                       </td>
-                      <td>
+                      <td data-label="Status">
                         <span style={{ 
                           padding: '6px 12px', 
                           borderRadius: '8px', 
@@ -916,7 +903,7 @@ export default function SuperAdmin() {
                            tenant.subscriptionStatus === 'trial' ? 'Teste' : 'Pendente'}
                         </span>
                       </td>
-                      <td style={{ textAlign: 'right' }}>
+                      <td data-label="Ações" style={{ textAlign: 'right' }}>
                         <button 
                           onClick={() => handleOpenFinancialMode(tenant)}
                           className="btn-premium btn-premium-secondary"

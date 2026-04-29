@@ -28,6 +28,9 @@ export interface Tenant {
   nextPaymentAt?: string;
   paymentDay?: number;
   monthlyFee?: number;
+  appointmentInterval?: number;
+  lunchStart?: string;
+  lunchEnd?: string;
 }
 
 export interface QueueItem {

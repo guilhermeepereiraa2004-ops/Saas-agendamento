@@ -139,7 +139,7 @@ export const getOneSignalId = async (): Promise<string | null> => {
 };
 
 // Disparar notificação via REST API (Backend/Helper)
-export const sendPushNotification = async (pushId: string, title: string, message: string) => {
+export const sendPushNotification = async (pushId: string, title: string, message: string, url?: string) => {
   const appId = import.meta.env.VITE_ONESIGNAL_APP_ID;
   const apiKey = import.meta.env.VITE_ONESIGNAL_REST_API_KEY;
 
@@ -161,6 +161,7 @@ export const sendPushNotification = async (pushId: string, title: string, messag
         include_subscription_ids: [pushId],
         contents: { en: message, pt: message },
         headings: { en: title, pt: title },
+        url: url, // Link para redirecionamento
         priority: 10, // Prioridade alta para "pular" na tela
         android_visibility: 1 // Torna visível na tela de bloqueio
       })
