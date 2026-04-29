@@ -109,13 +109,7 @@ export default function FinancialView({ tenantId }: Props) {
     .filter(r => r.completed_at.split('T')[0] === today)
     .reduce((sum, r) => sum + Number(r.price), 0);
 
-  const todayExpenses = expenses
-    .filter(e => e.created_at.split('T')[0] === today)
-    .reduce((sum, e) => sum + e.amount, 0);
 
-  const totalRevenue = records.reduce((sum, r) => sum + Number(r.price), 0);
-  const totalExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
-  const netProfit = totalRevenue - totalExpenses;
 
   const monthRevenue = records
     .filter(r => r.completed_at.startsWith(selectedMonth))
