@@ -30,23 +30,15 @@ export default function SuperAdmin() {
   const [loginPassword, setLoginPassword] = useState('');
   const [profession, setProfession] = useState<Profession>('barber');
   const [bookingType, setBookingType] = useState<'queue' | 'appointment'>('queue');
+  const [secondaryColor, setSecondaryColor] = useState('#ffffff');
   
   // SaaS Financial Fields
   const [subscriptionStatus, setSubscriptionStatus] = useState<Tenant['subscriptionStatus']>('trial');
   const [nextPaymentAt, setNextPaymentAt] = useState('');
   const [paymentDay, setPaymentDay] = useState(10);
   const [monthlyFee, setMonthlyFee] = useState(59.90);
-  const [workingHours, setWorkingHours] = useState<{day: number, start: string, end: string}[]>([
-    { day: 1, start: '09:00', end: '18:00' },
-    { day: 2, start: '09:00', end: '18:00' },
-    { day: 3, start: '09:00', end: '18:00' },
-    { day: 4, start: '09:00', end: '18:00' },
-    { day: 5, start: '09:00', end: '18:00' },
-    { day: 6, start: '09:00', end: '14:00' },
-  ]);
-  const [services, setServices] = useState<Service[]>([
-    { id: '1', name: 'Corte Clássico', price: 40, duration: 30 }
-  ]);
+  const [financialSearch, setFinancialSearch] = useState('');
+  const [financialFilter, setFinancialFilter] = useState('all');
 
   useEffect(() => {
     fetchTenants();
@@ -83,6 +75,7 @@ export default function SuperAdmin() {
         monthlyFee: parseFloat(t.monthly_fee || 0),
         workingHours: typeof t.working_hours === 'string' ? JSON.parse(t.working_hours) : (t.working_hours || []),
         services: typeof t.services === 'string' ? JSON.parse(t.services) : t.services,
+        secondaryColor: t.secondary_color || '#ffffff',
         isActive: t.is_active !== false, // default true if not set
       }));
       setTenants(mapped);
@@ -116,12 +109,11 @@ export default function SuperAdmin() {
       login_password: tenantData.loginPassword,
       profession: tenantData.profession,
       booking_type: tenantData.bookingType,
-      working_hours: tenantData.workingHours,
-      services: tenantData.services,
       subscription_status: tenantData.subscriptionStatus,
       next_payment_at: tenantData.nextPaymentAt ? new Date(tenantData.nextPaymentAt).toISOString() : null,
       payment_day: tenantData.paymentDay,
-      monthly_fee: tenantData.monthlyFee
+      monthly_fee: tenantData.monthlyFee,
+      secondary_color: tenantData.secondaryColor
     };
 
     let error;
@@ -171,18 +163,6 @@ export default function SuperAdmin() {
     }
   };
 
-  const handleAddService = () => {
-    setServices([...services, { id: Math.random().toString(), name: '', price: 0, duration: 30 }]);
-  };
-
-  const updateService = (id: string, field: keyof Service, value: string | number) => {
-    setServices(services.map(s => s.id === id ? { ...s, [field]: value } : s));
-  };
-
-  const removeService = (id: string) => {
-    setServices(services.filter(s => s.id !== id));
-  };
-
   const handleDelete = async (id: string, name: string) => {
     if (!window.confirm(`TEM CERTEZA? Isso excluirá permanentemente o estabelecimento "${name}" e todos os seus dados!`)) {
       return;
@@ -221,12 +201,11 @@ export default function SuperAdmin() {
       loginPassword,
       profession,
       bookingType,
-      workingHours,
-      services: services.filter(s => s.name.trim() !== ''),
       subscriptionStatus,
       nextPaymentAt,
       paymentDay,
-      monthlyFee
+      monthlyFee,
+      secondaryColor
     };
 
     const success = await saveTenantToSupabase(modifiedTenant);
@@ -288,15 +267,6 @@ export default function SuperAdmin() {
     setLoginPassword('');
     setProfession('barber');
     setBookingType('queue');
-    setWorkingHours([
-      { day: 1, start: '09:00', end: '18:00' },
-      { day: 2, start: '09:00', end: '18:00' },
-      { day: 3, start: '09:00', end: '18:00' },
-      { day: 4, start: '09:00', end: '18:00' },
-      { day: 5, start: '09:00', end: '18:00' },
-      { day: 6, start: '09:00', end: '14:00' },
-    ]);
-    setServices([{ id: Math.random().toString(), name: 'Corte Clássico', price: 40, duration: 30 }]);
     setSubscriptionStatus('trial');
     setNextPaymentAt('');
     setPaymentDay(10);
@@ -315,19 +285,6 @@ export default function SuperAdmin() {
     setLoginPassword(tenant.loginPassword || '');
     setProfession(tenant.profession || 'barber');
     setBookingType(tenant.bookingType || 'queue');
-    if (tenant.workingHours && tenant.workingHours.length > 0) {
-      setWorkingHours(tenant.workingHours);
-    } else {
-      setWorkingHours([
-        { day: 1, start: '09:00', end: '18:00' },
-        { day: 2, start: '09:00', end: '18:00' },
-        { day: 3, start: '09:00', end: '18:00' },
-        { day: 4, start: '09:00', end: '18:00' },
-        { day: 5, start: '09:00', end: '18:00' },
-        { day: 6, start: '09:00', end: '14:00' },
-      ]);
-    }
-    setServices(tenant.services.length > 0 ? [...tenant.services] : [{ id: Math.random().toString(), name: '', price: 0, duration: 30 }]);
     setSubscriptionStatus(tenant.subscriptionStatus || 'trial');
     setNextPaymentAt(tenant.nextPaymentAt || '');
     setPaymentDay(tenant.paymentDay || 10);
@@ -553,107 +510,29 @@ export default function SuperAdmin() {
                     </div>
 
                     <div className="form-group">
-                      <label>Cor de Destaque da Marca</label>
-                      <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                        <div style={{ position: 'relative', width: '54px', height: '54px' }}>
-                          <input type="color" value={primaryColor} onChange={e => setPrimaryColor(e.target.value)} style={{ width: '100%', height: '100%', padding: '0', border: 'none', borderRadius: '12px', cursor: 'pointer', background: 'transparent' }} />
-                          <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', borderRadius: '12px', pointerEvents: 'none', border: '2px solid rgba(255,255,255,0.1)' }}></div>
-                        </div>
-                        <input type="text" value={primaryColor} onChange={e => setPrimaryColor(e.target.value)} placeholder="#000000" style={{ flex: 1 }} />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Working Hours Setup (SaaS manager sets initial) */}
-                  <div style={{ marginTop: '2rem', paddingTop: '2rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-                    {bookingType === 'appointment' && (
-                      <div className="fade-in" style={{ background: 'rgba(255,255,255,0.015)', padding: '2rem', borderRadius: '20px', border: '1px solid rgba(255,255,255,0.04)' }}>
-                        <h4 style={{ marginBottom: '1.5rem', fontSize: '1rem', fontWeight: 600 }}>Configurar Horários da Semana</h4>
-                        <div style={{ display: 'grid', gap: '1rem' }}>
-                          {['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'].map((dayName, idx) => {
-                            const dayNum = idx === 6 ? 0 : idx + 1;
-                            const wh = workingHours.find(h => h.day === dayNum);
-                            const isWorking = !!wh;
-                            
-                            return (
-                              <div key={dayNum} style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', padding: '12px 16px', background: isWorking ? 'rgba(255,255,255,0.02)' : 'transparent', borderRadius: '12px', border: '1px solid', borderColor: isWorking ? 'rgba(255,255,255,0.05)' : 'transparent' }}>
-                                <label style={{ width: '120px', margin: 0, display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer' }}>
-                                  <input 
-                                    type="checkbox" 
-                                    checked={isWorking} 
-                                    onChange={(e) => {
-                                      if (e.target.checked) {
-                                        setWorkingHours([...workingHours, { day: dayNum, start: '09:00', end: '18:00' }].sort((a,b) => a.day - b.day));
-                                      } else {
-                                        setWorkingHours(workingHours.filter(h => h.day !== dayNum));
-                                      }
-                                    }} 
-                                    style={{ width: '20px', height: '20px', accentColor: 'var(--success)' }}
-                                  />
-                                  <span style={{ fontWeight: isWorking ? 700 : 400 }}>{dayName}</span>
-                                </label>
-                                {isWorking && wh ? (
-                                  <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                                    <input type="time" value={wh.start} onChange={e => setWorkingHours(workingHours.map(h => h.day === dayNum ? { ...h, start: e.target.value } : h))} style={{ width: '130px' }} />
-                                    <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>até</span>
-                                    <input type="time" value={wh.end} onChange={e => setWorkingHours(workingHours.map(h => h.day === dayNum ? { ...h, end: e.target.value } : h))} style={{ width: '130px' }} />
-                                  </div>
-                                ) : (
-                                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontStyle: 'italic', opacity: 0.5 }}>Estabelecimento fechado</span>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Services */}
-                  <div style={{ marginTop: '2.5rem', paddingTop: '2.5rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                      <div>
-                        <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Menu de Serviços</h3>
-                        <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '4px' }}>Defina o que será oferecido aos clientes</p>
-                      </div>
-                      <button type="button" onClick={handleAddService} className="btn-premium btn-premium-secondary" style={{ border: '1px solid rgba(16,185,129,0.3)', color: 'var(--success)' }}>
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                        Novo Serviço
-                      </button>
-                    </div>
-                    
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                      {services.map((service) => (
-                        <div key={service.id} className="fade-in" style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', background: 'rgba(255,255,255,0.01)', padding: '12px', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.03)', alignItems: 'center' }}>
-                          <div style={{ flex: '1 1 250px' }}>
-                            <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '4px', display: 'block' }}>Nome do Serviço</label>
-                            <input type="text" value={service.name} onChange={e => updateService(service.id, 'name', e.target.value)} placeholder="Nome do serviço (Ex: Corte Masculino)" required />
-                          </div>
-                          <div style={{ flex: '1 1 120px', position: 'relative' }}>
-                            <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '4px', display: 'block' }}>Preço</label>
-                            <div style={{ position: 'relative' }}>
-                              <span style={{ position: 'absolute', left: '16px', top: '14px', color: 'var(--text-secondary)', fontWeight: 600 }}>R$</span>
-                              <input type="number" value={service.price || ''} onChange={e => updateService(service.id, 'price', parseFloat(e.target.value))} placeholder="0.00" style={{ paddingLeft: '45px' }} required min="0" step="0.01" />
+                      <label>Cores da Marca</label>
+                      <div style={{ display: 'flex', gap: '1rem' }}>
+                        <div style={{ flex: 1 }}>
+                          <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Primária</label>
+                          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                            <div style={{ position: 'relative', width: '54px', height: '54px' }}>
+                              <input type="color" value={primaryColor} onChange={e => setPrimaryColor(e.target.value)} style={{ width: '100%', height: '100%', padding: '0', border: 'none', borderRadius: '12px', cursor: 'pointer', background: 'transparent' }} />
+                              <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', borderRadius: '12px', pointerEvents: 'none', border: '2px solid rgba(255,255,255,0.1)' }}></div>
                             </div>
-                          </div>
-                          {bookingType === 'appointment' && (
-                            <div style={{ flex: '1 1 120px', position: 'relative' }}>
-                              <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '4px', display: 'block' }}>Duração</label>
-                              <div style={{ position: 'relative' }}>
-                                <span style={{ position: 'absolute', right: '16px', top: '14px', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>min</span>
-                                <input type="number" value={service.duration || ''} onChange={e => updateService(service.id, 'duration', parseInt(e.target.value))} placeholder="30" style={{ paddingRight: '45px' }} required={bookingType === 'appointment'} min="5" step="5" />
-                              </div>
-                            </div>
-                          )}
-                          <div style={{ flex: '0 0 auto', alignSelf: 'flex-end', marginBottom: '4px' }}>
-                            {services.length > 1 && (
-                              <button type="button" onClick={() => removeService(service.id)} className="btn-premium-danger" style={{ width: '48px', height: '48px', padding: 0, borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-                              </button>
-                            )}
+                            <input type="text" value={primaryColor} onChange={e => setPrimaryColor(e.target.value)} placeholder="#000000" style={{ flex: 1 }} />
                           </div>
                         </div>
-                      ))}
+                        <div style={{ flex: 1 }}>
+                          <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Secundária</label>
+                          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                            <div style={{ position: 'relative', width: '54px', height: '54px' }}>
+                              <input type="color" value={secondaryColor} onChange={e => setSecondaryColor(e.target.value)} style={{ width: '100%', height: '100%', padding: '0', border: 'none', borderRadius: '12px', cursor: 'pointer', background: 'transparent' }} />
+                              <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', borderRadius: '12px', pointerEvents: 'none', border: '2px solid rgba(255,255,255,0.1)' }}></div>
+                            </div>
+                            <input type="text" value={secondaryColor} onChange={e => setSecondaryColor(e.target.value)} placeholder="#ffffff" style={{ flex: 1 }} />
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
@@ -824,8 +703,35 @@ export default function SuperAdmin() {
               </div>
             </div>
           </div>
-        ) : (
+        ) : activeTab === 'financial' ? (
           <div className="fade-in">
+            {/* Search and Filter Row */}
+            <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem', flexWrap: 'wrap', alignItems: 'center' }}>
+              <div style={{ position: 'relative', flex: 1, minWidth: '200px' }}>
+                <svg style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', opacity: 0.5 }} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                <input 
+                  type="text" 
+                  placeholder="Pesquisar por nome do estabelecimento..." 
+                  value={financialSearch}
+                  onChange={(e) => setFinancialSearch(e.target.value)}
+                  style={{ width: '100%', padding: '12px 12px 12px 40px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#fff' }}
+                />
+              </div>
+              <div style={{ minWidth: '180px' }}>
+                <select 
+                  value={financialFilter}
+                  onChange={(e) => setFinancialFilter(e.target.value)}
+                  style={{ width: '100%', padding: '12px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#fff' }}
+                >
+                  <option value="all">Todos os Status</option>
+                  <option value="active">Em dia</option>
+                  <option value="overdue">Atrasado</option>
+                  <option value="trial">Em Teste</option>
+                  <option value="pending">Pendente</option>
+                </select>
+              </div>
+            </div>
+
             {/* Stats Overview */}
             <div className="stats-grid">
               <div className="stat-card">
@@ -869,11 +775,23 @@ export default function SuperAdmin() {
                   </tr>
                 </thead>
                 <tbody>
-                  {tenants.map(tenant => (
+                  {tenants.filter(t => {
+                    const matchesSearch = t.name.toLowerCase().includes(financialSearch.toLowerCase());
+                    const matchesStatus = financialFilter === 'all' || t.subscriptionStatus === financialFilter;
+                    return matchesSearch && matchesStatus;
+                  }).map(tenant => (
                     <tr key={tenant.id}>
                       <td data-label="Estabelecimento">
-                        <div style={{ fontWeight: 700 }}>{tenant.name}</div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>/{tenant.slug}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <div style={{ width: '24px', height: '12px', background: tenant.primaryColor, borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)' }} title="Cor Primária"></div>
+                            <div style={{ width: '24px', height: '12px', background: tenant.secondaryColor, borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)' }} title="Cor do Letreiro"></div>
+                          </div>
+                          <div>
+                            <div style={{ fontWeight: 700 }}>{tenant.name}</div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>/{tenant.slug}</div>
+                          </div>
+                        </div>
                       </td>
                       <td data-label="Valor" style={{ fontWeight: 600 }}>R$ {tenant.monthlyFee?.toFixed(2)}</td>
                       <td data-label="Vencimento">
@@ -918,7 +836,7 @@ export default function SuperAdmin() {
               </table>
             </div>
           </div>
-        )}
+        ) : null}
       </main>
 
       {/* Financial Modal Redesign */}

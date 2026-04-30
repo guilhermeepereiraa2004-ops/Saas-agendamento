@@ -21,7 +21,7 @@ CREATE TABLE queue_items (
     service_id TEXT NOT NULL,
     service_name TEXT NOT NULL,
     price DECIMAL(10,2) NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('serving', 'ready', 'waiting')),
+    status TEXT NOT NULL CHECK (status IN ('serving', 'ready', 'waiting', 'pending', 'completed', 'cancelled')),
     joined_at TIMESTAMPTZ DEFAULT now()
 );
 

@@ -52,6 +52,7 @@ function App() {
           workingHours: typeof t.working_hours === 'string' ? JSON.parse(t.working_hours) : (t.working_hours || []),
           subscriptionStatus: t.subscription_status || 'trial',
           paymentDay: t.payment_day || 10,
+          secondaryColor: t.secondary_color || '#ffffff',
           isActive: t.is_active !== false,
         }));
         setTenants(mappedTenants);

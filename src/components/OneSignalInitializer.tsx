@@ -163,7 +163,10 @@ export const sendPushNotification = async (pushId: string, title: string, messag
         headings: { en: title, pt: title },
         url: url, // Link para redirecionamento
         priority: 10, // Prioridade alta para "pular" na tela
-        android_visibility: 1 // Torna visível na tela de bloqueio
+        ttl: 3600, // Notificação expira em 1 hora se não for entregue
+        android_visibility: 1, // Torna visível na tela de bloqueio
+        chrome_web_icon: window.location.origin + '/logo_suavez.png', // Logo Sua Vez
+        icon: window.location.origin + '/logo_suavez.png' // Ícone padrão
       })
     });
     

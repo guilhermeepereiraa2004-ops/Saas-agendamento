@@ -163,7 +163,7 @@
   width: 100%;
   padding: 16px;
   background: var(--accent-primary);
-  color: #111;
+  color: var(--accent-secondary, #111);
   border-radius: var(--border-radius-md);
   font-size: 1.1rem;
   font-weight: 700;
@@ -338,6 +338,21 @@
   height: 8px;
   border-radius: 50%;
   background-color: var(--accent-primary);
+}
+
+.status-badge.pending {
+  background-color: rgba(245, 158, 11, 0.1);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.status-badge.pending::before {
+  content: '';
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #f59e0b;
 }
 
 .btn-complete {
@@ -592,7 +607,7 @@
 
 .reorder-btn:hover:not(:disabled) {
   background: var(--accent-primary);
-  color: #111;
+  color: var(--accent-secondary, #111);
   border-color: var(--accent-primary);
 }
 

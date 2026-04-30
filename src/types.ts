@@ -31,6 +31,7 @@ export interface Tenant {
   appointmentInterval?: number;
   lunchStart?: string;
   lunchEnd?: string;
+  secondaryColor?: string;
 }
 
 export interface QueueItem {
@@ -40,12 +41,13 @@ export interface QueueItem {
   serviceId: string;
   serviceName: string;
   price: number;
-  status: 'serving' | 'ready' | 'waiting';
+  status: 'serving' | 'ready' | 'waiting' | 'pending' | 'completed' | 'cancelled';
   joinedAt: string; // ISO string 
   appointmentTime?: string; // ISO string
   isOnWay?: boolean;
   pushId?: string;
   startedAt?: string;
+  duration?: number;
 }
 
 export interface TenantTask {

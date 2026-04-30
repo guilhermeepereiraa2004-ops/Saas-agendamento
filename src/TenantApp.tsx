@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import './App.css';
-import type { QueueItem, Tenant, TenantTask, TenantProduct } from './types';
+import type { QueueItem, Tenant, TenantTask, TenantProduct, Service } from './types';
 import { supabase } from './lib/supabase';
 import FinancialView from './FinancialView';
 import { getProfessionConfig } from './lib/professionConfig';
@@ -30,20 +30,30 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const prevQueueRef = useRef<QueueItem[]>([]);
 
   // INITIAL LOAD + REALTIME
-  const mapQueueItem = (q: any): QueueItem => ({
-    id: q.id,
-    name: q.name,
-    whatsapp: q.whatsapp,
-    serviceId: q.service_id,
-    serviceName: q.service_name,
-    price: parseFloat(q.price),
-    status: q.status,
-    joinedAt: q.joined_at,
-    appointmentTime: q.appointment_time,
-    isOnWay: q.is_on_way,
-    pushId: q.push_id,
-    startedAt: q.started_at
-  });
+  const mapQueueItem = (q: any): QueueItem => {
+    // Fallback logic: if duration is missing in the record, try to find it in current services
+    let duration = q.duration;
+    if (!duration && tenant?.services) {
+      const svc = tenant.services.find(s => s.id === q.service_id);
+      if (svc) duration = svc.duration;
+    }
+
+    return {
+      id: q.id,
+      name: q.name,
+      whatsapp: q.whatsapp,
+      serviceId: q.service_id,
+      serviceName: q.service_name,
+      price: parseFloat(q.price),
+      status: q.status,
+      joinedAt: q.joined_at,
+      appointmentTime: q.appointment_time,
+      isOnWay: q.is_on_way,
+      pushId: q.push_id,
+      startedAt: q.started_at,
+      duration: duration || 30
+    };
+  };
 
   const fetchData = async () => {
     const { data: queueData } = await supabase
@@ -67,6 +77,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         profession: tenantData.profession,
         name: tenantData.name,
         primaryColor: tenantData.primary_color,
+        secondaryColor: tenantData.secondary_color,
+        whatsapp: tenantData.whatsapp,
         hasLogo: tenantData.has_logo,
         logoUrl: tenantData.logo_url,
         isOnline: tenantData.is_online ?? true,
@@ -134,7 +146,12 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
             ...prev,
             isOnline: payload.new.is_online ?? prev.isOnline,
             name: payload.new.name ?? prev.name,
+            whatsapp: payload.new.whatsapp ?? prev.whatsapp,
             primaryColor: payload.new.primary_color ?? prev.primaryColor,
+            secondaryColor: payload.new.secondary_color ?? prev.secondaryColor,
+            logoUrl: payload.new.logo_url ?? prev.logoUrl,
+            hasLogo: payload.new.has_logo ?? prev.hasLogo,
+            services: payload.new.services ?? prev.services,
             nextPaymentAt: payload.new.next_payment_at ? payload.new.next_payment_at.split('T')[0] : prev.nextPaymentAt,
             bookingType: payload.new.booking_type ?? prev.bookingType,
             workingHours: payload.new.working_hours ?? prev.workingHours,
@@ -177,6 +194,11 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     return new Date(d.getTime() - offset).toISOString().split('T')[0];
   });
   const [selectedTimeSlot, setSelectedTimeSlot] = useState('');
+  const [adminSelectedDate, setAdminSelectedDate] = useState(() => {
+    const d = new Date();
+    const offset = d.getTimezoneOffset() * 60000;
+    return new Date(d.getTime() - offset).toISOString().split('T')[0];
+  });
 
   // O serviço não é mais selecionado automaticamente para evitar mal entendidos
 
@@ -185,7 +207,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showLogin, setShowLogin] = useState(false);
-  const [activeTab, setActiveTab] = useState<'queue' | 'financial' | 'tasks' | 'store' | 'settings'>('queue');
+  const [activeTab, setActiveTab] = useState<'atendimento' | 'agenda' | 'financial' | 'tasks' | 'store' | 'services' | 'scheduling' | 'settings'>('atendimento');
   const [tasks, setTasks] = useState<TenantTask[]>([]);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [products, setProducts] = useState<TenantProduct[]>([]);
@@ -202,6 +224,13 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const [isServiceListOpen, setIsServiceListOpen] = useState(false);
   const [showJoinConfirmation, setShowJoinConfirmation] = useState(false);
   const [itemForCancel, setItemForCancel] = useState<QueueItem | null>(null);
+  const [showAdminDeleteModal, setShowAdminDeleteModal] = useState(false);
+  const [itemToDelete, setItemToDelete] = useState<QueueItem | null>(null);
+  const [showServiceModal, setShowServiceModal] = useState(false);
+  const [editingService, setEditingService] = useState<Service | null>(null);
+  const [newServiceName, setNewServiceName] = useState('');
+  const [newServicePrice, setNewServicePrice] = useState('');
+  const [newServiceDuration, setNewServiceDuration] = useState('30');
 
   const [notifsEnabled, setNotifsEnabled] = useState(true);
 
@@ -364,30 +393,55 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     const lunchStartTime = lStart ? new Date(date).setHours(lStart[0], lStart[1], 0, 0) : null;
     const lunchEndTime = lEnd ? new Date(date).setHours(lEnd[0], lEnd[1], 0, 0) : null;
 
+    const selectedSvc = tenant.services.find(s => s.id === selectedServiceId);
+    const selectedDuration = selectedSvc?.duration || 30;
+
     while (current < end) {
       const timeStr = current.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', hour12: false });
       
-      const currentTimeMs = current.getTime();
-      const isLunch = lunchStartTime && lunchEndTime && currentTimeMs >= lunchStartTime && currentTimeMs < lunchEndTime;
+      const slotStartMs = current.getTime();
+      const slotEndMs = slotStartMs + selectedDuration * 60000;
+      
       const isPast = date.toDateString() === now.toDateString() && current < now;
 
-      // Check if slot is already taken
-      const isTaken = queue.some(item => {
+      // Check if the entire service duration overlaps with lunch
+      const overlapsLunch = lunchStartTime && lunchEndTime && (
+        (slotStartMs >= lunchStartTime && slotStartMs < lunchEndTime) || // Starts during lunch
+        (slotEndMs > lunchStartTime && slotEndMs <= lunchEndTime) ||   // Ends during lunch
+        (slotStartMs <= lunchStartTime && slotEndMs >= lunchEndTime)    // Spans across lunch
+      );
+
+      // Check if service fits before the end of the day
+      const fitsInDay = slotEndMs <= end.getTime();
+
+      // Check if the entire service duration overlaps with any existing appointment
+      const overlapsAppointment = queue.some(item => {
         if (!item.appointmentTime) return false;
-        const itemDate = new Date(item.appointmentTime);
+        const itemStart = new Date(item.appointmentTime);
+        const itemDuration = Number(item.duration) || 30;
+        const itemEnd = new Date(itemStart.getTime() + itemDuration * 60000);
         
-        // Comparação robusta de data e hora
-        const isSameDay = itemDate.getFullYear() === date.getFullYear() &&
-                          itemDate.getMonth() === date.getMonth() &&
-                          itemDate.getDate() === date.getDate();
+        const isSameDay = itemStart.getFullYear() === date.getFullYear() &&
+                          itemStart.getMonth() === date.getMonth() &&
+                          itemStart.getDate() === date.getDate();
         
-        const itemTimeStr = itemDate.getHours().toString().padStart(2, '0') + ':' + 
-                           itemDate.getMinutes().toString().padStart(2, '0');
+        if (!isSameDay) return false;
+
+        const itemStartMs = itemStart.getTime();
+        const itemEndMs = itemEnd.getTime();
+
+        console.log(`[DEBUG] Verificando Slot ${timeStr} (${selectedDuration}min) contra ${item.name} (${itemDuration}min às ${itemStart.toLocaleTimeString()})`);
+
+        const overlaps = slotStartMs < itemEndMs && slotEndMs > itemStartMs;
         
-        return isSameDay && itemTimeStr === timeStr;
+        if (overlaps) {
+          console.log(`[DEBUG] Slot ${timeStr} bloqueado por ${item.name} (${item.serviceName}): ${itemStart.toLocaleTimeString()} - ${itemEnd.toLocaleTimeString()}`);
+        }
+
+        return overlaps;
       });
 
-      if (!isLunch && !isPast && !isTaken) {
+      if (!overlapsLunch && !isPast && !overlapsAppointment && fitsInDay) {
         slots.push(timeStr);
       }
 
@@ -481,9 +535,93 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     setShowJoinConfirmation(true);
   };
 
-  // Status counts for the summary bar
-  const servingCount = queue.filter(item => item.status === 'serving').length;
-  const waitingCount = queue.filter(item => item.status === 'waiting' || item.status === 'ready').length;
+  // Filtering Logic
+  const todayStr = new Date().toISOString().split('T')[0];
+  
+  // Today's Queue (Atendimento)
+  const todayQueue = queue.filter(item => {
+    const itemDate = item.appointmentTime ? item.appointmentTime.split('T')[0] : item.joinedAt.split('T')[0];
+    return itemDate === todayStr;
+  }).sort((a, b) => {
+    if (a.appointmentTime && b.appointmentTime) return a.appointmentTime.localeCompare(b.appointmentTime);
+    return a.joinedAt.localeCompare(b.joinedAt);
+  });
+
+  // Future Agenda
+  const futureAgenda = queue.filter(item => {
+    const itemDate = item.appointmentTime ? item.appointmentTime.split('T')[0] : item.joinedAt.split('T')[0];
+    return itemDate > todayStr;
+  }).sort((a, b) => {
+    const dateA = a.appointmentTime || a.joinedAt;
+    const dateB = b.appointmentTime || b.joinedAt;
+    return dateA.localeCompare(dateB);
+  });
+
+  // Filter for the specific admin selected date (used in Agenda tab)
+  const filteredAgenda = queue.filter(item => {
+    const itemDate = item.appointmentTime ? item.appointmentTime.split('T')[0] : item.joinedAt.split('T')[0];
+    return itemDate === adminSelectedDate;
+  }).sort((a, b) => {
+    if (a.appointmentTime && b.appointmentTime) return a.appointmentTime.localeCompare(b.appointmentTime);
+    return a.joinedAt.localeCompare(b.joinedAt);
+  });
+
+  const servingCount = todayQueue.filter(item => item.status === 'serving').length;
+  const waitingCount = todayQueue.filter(item => item.status === 'waiting' || item.status === 'ready').length;
+
+  const handleApproveAppointment = async (itemId: string) => {
+    const item = queue.find(i => i.id === itemId);
+    if (!item) return;
+
+    const { error } = await supabase
+      .from('queue_items')
+      .update({ status: 'waiting' })
+      .eq('id', itemId);
+
+    if (!error) {
+      showToast(`Agendamento de ${item.name} confirmado! ✅`, 'success');
+      if (item.pushId) {
+        sendPushNotification(
+          item.pushId,
+          'Agendamento Confirmado! ✅',
+          `Olá ${item.name}, seu agendamento para ${item.serviceName} foi confirmado pelo profissional.`,
+          window.location.origin + '/' + tenant.slug
+        );
+      }
+    }
+  };
+
+  const handleRejectAppointment = async (item: QueueItem) => {
+    const confirm = window.confirm(`Deseja realmente recusar o agendamento de ${item.name}?`);
+    if (!confirm) return;
+
+    const { error } = await supabase
+      .from('queue_items')
+      .update({ status: 'cancelled' })
+      .eq('id', item.id);
+
+    if (!error) {
+      showToast('Agendamento recusado.', 'info');
+      if (item.pushId) {
+        sendPushNotification(
+          item.pushId,
+          'Agendamento Recusado ❌',
+          `Olá ${item.name}, infelizmente não poderemos atender seu agendamento de ${item.serviceName}.`,
+          window.location.origin + '/' + tenant.slug
+        );
+      }
+    }
+  };
+
+
+
+  // Group client queue by day
+  const groupedClientQueue = queue.reduce((acc, item) => {
+    const date = item.appointmentTime ? item.appointmentTime.split('T')[0] : item.joinedAt.split('T')[0];
+    if (!acc[date]) acc[date] = [];
+    acc[date].push(item);
+    return acc;
+  }, {} as Record<string, QueueItem[]>);
 
   // Handle actual adding to queue
   const confirmJoinQueue = async () => {
@@ -491,6 +629,12 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     setShowConfirmation(false);
     const startTime = Date.now();
     setLoading(true);
+    
+    if (myQueueItemIds.length >= 4) {
+      showToast('Limite de 3 acompanhantes atingido!', 'warning');
+      setLoading(false);
+      return;
+    }
     
     try {
       const selectedSvc = tenant.services.find(s => s.id === selectedServiceId);
@@ -527,9 +671,10 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         service_id: selectedSvc.id,
         service_name: selectedSvc.name,
         price: selectedSvc.price,
-        status: tenant.bookingType === 'appointment' ? 'ready' : 'waiting',
+        status: tenant.bookingType === 'appointment' ? 'pending' : 'waiting',
         appointment_time: tenant.bookingType === 'appointment' ? getISOWithOffset(selectedDate, selectedTimeSlot) : null,
-        push_id: pushId
+        push_id: pushId,
+        duration: selectedSvc.duration || 30
       }]).select();
 
       if (error) {
@@ -553,14 +698,12 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
         // Notificar o PROFISSIONAL (se ele tiver um admin_push_id salvo)
         const { data: tenantData } = await supabase.from('tenants').select('admin_push_id').eq('id', tenant.id).single();
-        console.log('[DEBUG] Admin Push ID encontrado:', tenantData?.admin_push_id);
-        
         if (tenantData?.admin_push_id && import.meta.env.PROD) {
           console.log('[DEBUG] Disparando notificação para o Admin...');
           sendPushNotification(
             tenantData.admin_push_id,
-            'Novo Cliente na Fila! 👤',
-            `${name.trim()} acabou de entrar para ${selectedSvc.name}.`,
+            tenant.bookingType === 'appointment' ? 'Novo Agendamento Solicitado! 📅' : 'Novo Cliente na Fila! 👤',
+            `${name.trim()} solicitou ${selectedSvc.name}${tenant.bookingType === 'appointment' ? ` para o dia ${new Date(selectedDate + 'T12:00:00').toLocaleDateString('pt-BR')} às ${selectedTimeSlot}` : ''}.`,
             window.location.origin + '/' + tenant.slug
           );
         }
@@ -647,10 +790,22 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     }
   };
 
-  const handleRemoveFromQueue = async (id: string) => {
+  const handleRemoveFromQueue = async (item: QueueItem) => {
     if (!isAuthenticated) return;
-    if (!window.confirm('Remover este cliente da fila?')) return;
-    await supabase.from('queue_items').delete().eq('id', id);
+    setItemToDelete(item);
+    setShowAdminDeleteModal(true);
+  };
+
+  const confirmAdminDelete = async () => {
+    if (!itemToDelete) return;
+    const { error } = await supabase.from('queue_items').delete().eq('id', itemToDelete.id);
+    if (error) {
+      showToast('Erro ao remover: ' + error.message, 'error');
+    } else {
+      showToast('Cliente removido com sucesso.', 'info');
+    }
+    setShowAdminDeleteModal(false);
+    setItemToDelete(null);
   };
 
   const handleConfirmOnWay = async (id: string) => {
@@ -798,16 +953,114 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
   // Format WhatsApp: (XX) XXXXX-XXXX
   const formatPhoneNumber = (value: string) => {
-    const numbers = value.replace(/\D/g, '');
-    if (numbers.length <= 2) return numbers;
-    if (numbers.length <= 7) return `(${numbers.slice(0, 2)}) ${numbers.slice(2)}`;
-    return `(${numbers.slice(0, 2)}) ${numbers.slice(2, 7)}-${numbers.slice(7, 11)}`;
+    const n = value.replace(/\D/g, '');
+    if (n.length <= 2) return n;
+    if (n.length <= 10) {
+      // (XX) XXXX-XXXX (fixo ou mobile sem 9)
+      return `(${n.slice(0, 2)}) ${n.slice(2, 6)}-${n.slice(6)}`;
+    }
+    // (XX) 9XXXX-XXXX (mobile com 9)
+    return `(${n.slice(0, 2)}) ${n.slice(2, 7)}-${n.slice(7, 11)}`;
   };
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const formatted = formatPhoneNumber(e.target.value);
-    if (formatted.length <= 15) { // Limit to (XX) XXXXX-XXXX
+    if (formatted.length <= 15) { // Limit to (XX) 9XXXX-XXXX
       setCustomerWhatsapp(formatted);
+    }
+  };
+
+  const handleSaveService = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newServiceName.trim() || !newServicePrice) return;
+
+    const price = parseFloat(newServicePrice.replace(',', '.'));
+    if (isNaN(price)) {
+      showToast('Preço inválido!', 'warning');
+      return;
+    }
+
+    let updatedServices: Service[] = [];
+    
+    if (editingService) {
+      // Edit existing
+      updatedServices = tenant.services.map(s => 
+        s.id === editingService.id ? { ...s, name: newServiceName, price, duration: parseInt(newServiceDuration) || 30 } : s
+      );
+    } else {
+      // Add new
+      const newService: Service = {
+        id: crypto.randomUUID(),
+        name: newServiceName,
+        price,
+        duration: parseInt(newServiceDuration) || 30
+      };
+      updatedServices = [...tenant.services, newService];
+    }
+
+    const { error } = await supabase
+      .from('tenants')
+      .update({ services: updatedServices })
+      .eq('id', tenant.id);
+
+    if (error) {
+      showToast('Erro ao salvar serviço: ' + error.message, 'error');
+    } else {
+      showToast(editingService ? 'Serviço atualizado!' : 'Serviço adicionado!', 'success');
+      setTenant({ ...tenant, services: updatedServices });
+      setShowServiceModal(false);
+      setEditingService(null);
+      setNewServiceName('');
+      setNewServicePrice('');
+      setNewServiceDuration('30');
+    }
+  };
+
+  const handleDeleteService = async (id: string) => {
+    if (!confirm('Tem certeza que deseja excluir este serviço?')) return;
+
+    const updatedServices = tenant.services.filter(s => s.id !== id);
+
+    const { error } = await supabase
+      .from('tenants')
+      .update({ services: updatedServices })
+      .eq('id', tenant.id);
+
+    if (error) {
+      showToast('Erro ao excluir serviço: ' + error.message, 'error');
+    } else {
+      showToast('Serviço excluído!', 'success');
+      setTenant({ ...tenant, services: updatedServices });
+    }
+  };
+
+  const openServiceModal = (service?: Service) => {
+    if (service) {
+      setEditingService(service);
+      setNewServiceName(service.name);
+      setNewServicePrice(service.price.toString());
+      setNewServiceDuration((service.duration || 30).toString());
+    } else {
+      setEditingService(null);
+      setNewServiceName('');
+      setNewServicePrice('');
+      setNewServiceDuration('30');
+    }
+    setShowServiceModal(true);
+  };
+
+  const updateTenantProfile = async (field: keyof Tenant, value: any) => {
+    const dbField = field === 'primaryColor' ? 'primary_color' : field === 'secondaryColor' ? 'secondary_color' : field === 'logoUrl' ? 'logo_url' : field === 'hasLogo' ? 'has_logo' : field;
+    const { error } = await supabase
+      .from('tenants')
+      .update({ [dbField]: value })
+      .eq('id', tenant.id);
+
+    if (error) {
+      showToast('Erro ao atualizar perfil: ' + error.message, 'error');
+    } else {
+      setTenant({ ...tenant, [field]: value });
+      showToast('Perfil atualizado com sucesso!', 'success');
     }
   };
 
@@ -845,15 +1098,18 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   // Dynamic CSS variables for tenant theme dynamically applied to document root 
   useEffect(() => {
     const color = tenant.primaryColor || '#d4af37';
+    const sColor = tenant.secondaryColor || '#ffffff';
     document.documentElement.style.setProperty('--accent-primary', color);
     document.documentElement.style.setProperty('--accent-primary-rgb', hexToRgb(color));
+    document.documentElement.style.setProperty('--accent-secondary', sColor);
     
     // Cleanup if leaving tenant view
     return () => {
       document.documentElement.style.removeProperty('--accent-primary');
       document.documentElement.style.removeProperty('--accent-primary-rgb');
+      document.documentElement.style.removeProperty('--accent-secondary');
     };
-  }, [tenant.primaryColor]);
+  }, [tenant.primaryColor, tenant.secondaryColor]);
 
   return (
     <>
@@ -948,12 +1204,20 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
             <nav className="sidebar-nav">
               <button 
-                className={`nav-item ${activeTab === 'queue' ? 'active' : ''}`}
+                className={`nav-item ${activeTab === 'atendimento' ? 'active' : ''}`}
                 style={{ cursor: 'pointer' }}
-                onClick={() => { setActiveTab('queue'); setIsMobileMenuOpen(false); }}
+                onClick={() => { setActiveTab('atendimento'); setIsMobileMenuOpen(false); }}
               >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-                {tenant.bookingType === 'appointment' ? 'Agendamentos' : 'Fila de Espera'}
+                Atendimento (Hoje)
+              </button>
+              <button 
+                className={`nav-item ${activeTab === 'agenda' ? 'active' : ''}`}
+                style={{ cursor: 'pointer' }}
+                onClick={() => { setActiveTab('agenda'); setIsMobileMenuOpen(false); }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                Agenda (Futuro)
               </button>
               <button 
                 className={`nav-item ${activeTab === 'financial' ? 'active' : ''}`}
@@ -978,6 +1242,22 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
               >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path><line x1="3" y1="6" x2="21" y2="6"></line><path d="M16 10a4 4 0 0 1-8 0"></path></svg>
                 Loja
+              </button>
+              <button 
+                className={`nav-item ${activeTab === 'services' ? 'active' : ''}`}
+                style={{ cursor: 'pointer' }}
+                onClick={() => { setActiveTab('services'); setIsMobileMenuOpen(false); }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+                Serviços
+              </button>
+              <button 
+                className={`nav-item ${activeTab === 'scheduling' ? 'active' : ''}`}
+                style={{ cursor: 'pointer' }}
+                onClick={() => { setActiveTab('scheduling'); setIsMobileMenuOpen(false); }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>
+                Gestão de atendimento
               </button>
               <button 
                 className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
@@ -1073,12 +1353,19 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
                 </button>
                 <div className="topbar-info">
-                <h1>
-                    {activeTab === 'queue' ? (tenant.bookingType === 'appointment' ? 'Agenda de Hoje' : 'Fila de Espera') : 
+                  <h1>
+                    {activeTab === 'atendimento' ? 'Atendimento de Hoje' : 
+                     activeTab === 'agenda' ? 'Agenda de Compromissos' :
                      activeTab === 'financial' ? 'Controle Financeiro' :
                      activeTab === 'tasks' ? 'Controle de Atividades' : 'Minha Loja'}
                   </h1>
-                  <p>{new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <p style={{ margin: 0 }}>
+                      {activeTab === 'atendimento' 
+                        ? new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })
+                        : new Date(adminSelectedDate + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}
+                    </p>
+                  </div>
                 </div>
               </div>
               <div className="topbar-actions" style={{ display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
@@ -1086,9 +1373,15 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                     <div className={`sub-dot ${tenant.subscriptionStatus === 'active' ? 'active' : 'warning'}`}></div>
                     <span>Plano {tenant.subscriptionStatus === 'active' ? 'Ativo' : 'Pendente'}</span>
                   </div>
-                  {activeTab === 'queue' && (
+                  {(activeTab === 'atendimento' || activeTab === 'agenda') && (
                     <button 
-                      onClick={() => setIsAdminAddModalOpen(true)}
+                      onClick={() => {
+                        if (activeTab === 'atendimento') {
+                          setAdminSelectedDate(todayStr);
+                          setSelectedDate(todayStr);
+                        }
+                        setIsAdminAddModalOpen(true);
+                      }}
                       style={{ 
                         padding: '10px 20px', 
                         display: 'flex', 
@@ -1185,7 +1478,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                         </div>
                       )}
 
-                      <button type="submit" className="btn-submit" style={{ width: '100%', padding: '14px', background: 'var(--accent-primary)', color: '#000', fontWeight: 800, borderRadius: '10px' }}>
+                      <button type="submit" className="btn-submit" style={{ width: '100%', padding: '14px', background: 'var(--accent-primary)', color: 'var(--accent-secondary)', fontWeight: 800, borderRadius: '10px' }}>
                         {tenant.bookingType === 'appointment' ? 'Agendar Cliente' : 'Colocar na Fila'}
                       </button>
                     </form>
@@ -1364,11 +1657,114 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                   </div>
                 </div>
 
+              ) : activeTab === 'services' ? (
+                <div className="fade-in">
+                  <div className="premium-card" style={{ padding: '2rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
+                      <div>
+                        <h2 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Gestão de Serviços</h2>
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Cadastre e gerencie os serviços oferecidos aos seus clientes.</p>
+                      </div>
+                      <button onClick={() => openServiceModal()} className="btn-submit" style={{ width: 'auto', padding: '0 24px', background: '#0f172a', color: '#fff' }}>
+                        + Novo Serviço
+                      </button>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1.5rem' }}>
+                      {tenant.services.length === 0 ? (
+                        <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '4rem', background: 'rgba(255,255,255,0.02)', borderRadius: '20px' }}>
+                          <p style={{ color: 'var(--text-secondary)' }}>Nenhum serviço cadastrado ainda.</p>
+                        </div>
+                      ) : tenant.services.map(s => (
+                        <div key={s.id} className="glass-card" style={{ padding: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div>
+                            <h4 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '4px' }}>{s.name}</h4>
+                            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                              <p style={{ color: '#10b981', fontWeight: 800, fontSize: '1.1rem' }}>R$ {s.price.toFixed(2).replace('.', ',')}</p>
+                              <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: '4px' }}>
+                                {s.duration || 30} min
+                              </span>
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', gap: '10px' }}>
+                            <button 
+                              onClick={() => openServiceModal(s)}
+                              style={{ background: 'rgba(59, 130, 246, 0.1)', color: '#3b82f6', border: 'none', padding: '8px', borderRadius: '8px', cursor: 'pointer' }}
+                              title="Editar"
+                            >
+                              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                            </button>
+                            <button 
+                              onClick={() => handleDeleteService(s.id)}
+                              style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: 'none', padding: '8px', borderRadius: '8px', cursor: 'pointer' }}
+                              title="Excluir"
+                            >
+                              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
               ) : activeTab === 'settings' ? (
+                <div className="fade-in">
+                  <div className="premium-card" style={{ padding: '2.5rem' }}>
+                    <div style={{ marginBottom: '2.5rem' }}>
+                      <h2 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Configurações do Perfil</h2>
+                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Gerencie a identidade visual e informações básicas do seu estabelecimento.</p>
+                    </div>
+
+                    <div style={{ display: 'grid', gap: '2rem' }}>
+                      {/* Info Form */}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '2rem' }}>
+                        <div className="form-group">
+                          <label style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 700, marginBottom: '8px', display: 'block' }}>WhatsApp de Contato</label>
+                          <input 
+                            type="text" 
+                            className="premium-input" 
+                            value={tenant.whatsapp} 
+                            onChange={(e) => setTenant({ ...tenant, whatsapp: formatPhoneNumber(e.target.value) })}
+                            onBlur={(e) => updateTenantProfile('whatsapp', e.target.value)}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 700, marginBottom: '8px', display: 'block' }}>Cor da Marca</label>
+                          <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                            <input 
+                              type="color" 
+                              value={tenant.primaryColor || '#d4af37'} 
+                              onChange={(e) => setTenant({ ...tenant, primaryColor: e.target.value })}
+                              onBlur={(e) => updateTenantProfile('primaryColor', e.target.value)}
+                              style={{ width: '50px', height: '50px', border: 'none', borderRadius: '12px', cursor: 'pointer', background: 'transparent' }}
+                            />
+                            <span style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>{tenant.primaryColor?.toUpperCase() || '#D4AF37'}</span>
+                          </div>
+                        </div>
+                        <div className="form-group">
+                          <label style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 700, marginBottom: '8px', display: 'block' }}>Cor do Letreiro (Texto)</label>
+                          <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                            <input 
+                              type="color" 
+                              value={tenant.secondaryColor || '#ffffff'} 
+                              onChange={(e) => setTenant({ ...tenant, secondaryColor: e.target.value })}
+                              onBlur={(e) => updateTenantProfile('secondaryColor', e.target.value)}
+                              style={{ width: '50px', height: '50px', border: 'none', borderRadius: '12px', cursor: 'pointer', background: 'transparent' }}
+                            />
+                            <span style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>{tenant.secondaryColor?.toUpperCase() || '#FFFFFF'}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+              ) : activeTab === 'scheduling' ? (
                 <div className="fade-in">
                   <div className="premium-card" style={{ padding: '2rem' }}>
                     <div style={{ marginBottom: '2.5rem' }}>
-                      <h2 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Configurações de Atendimento</h2>
+                      <h2 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Gestão de atendimento</h2>
                       <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Escolha como seus clientes devem agendar os serviços.</p>
                     </div>
 
@@ -1580,30 +1976,30 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                   </div>
                 </div>
 
-              ) : (
+              ) : activeTab === 'atendimento' ? (
                 <div className="admin-dashboard-container">
                   <div className="admin-stats-row">
-                    <div className="admin-stat-card"><span className="stat-label">Clientes Hoje</span><span className="stat-value">{completedCount}</span></div>
+                    <div className="admin-stat-card"><span className="stat-label">Concluídos Hoje</span><span className="stat-value">{completedCount}</span></div>
                     <div className="admin-stat-card"><span className="stat-label">Em Espera</span><span className="stat-value">{waitingCount}</span></div>
                     <div className="admin-stat-card"><span className="stat-label">Atendendo Agora</span><span className="stat-value">{servingCount}</span></div>
                   </div>
                   <div className="admin-queue-list-section">
                     <div className="section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                      <h2 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Gestão de Atendimento</h2>
+                      <h2 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Gestão de Hoje</h2>
                       <div className="live-indicator"><span className="live-dot"></span>AO VIVO</div>
                     </div>
                     <div className="admin-queue-list">
-                      {queue.length === 0 ? (
-                        <div className="empty-state" style={{ padding: '4rem', textAlign: 'center', borderRadius: '20px' }}>
-                          <p style={{ color: '#64748b', fontWeight: 500 }}>Nenhum cliente na fila no momento.</p>
+                      {todayQueue.filter(item => item.status !== 'pending' && item.status !== 'cancelled' && item.status !== 'completed').length === 0 ? (
+                        <div className="empty-state" style={{ padding: '4rem', textAlign: 'center', borderRadius: '20px', border: '2px dashed rgba(0,0,0,0.05)' }}>
+                          <p style={{ color: '#64748b', fontWeight: 500 }}>Nenhum atendimento confirmado para hoje.</p>
                         </div>
-                      ) : queue.map((item, index) => (
+                      ) : todayQueue.filter(item => item.status !== 'pending' && item.status !== 'cancelled' && item.status !== 'completed').map((item, index) => (
                         <div key={item.id} className={`admin-queue-item ${item.status}`}>
                           <div className="item-pos">{index + 1}º</div>
                           <div className="item-main">
                             <h4 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                               {item.name}
-                              {item.isOnWay && <span style={{ fontSize: '0.7rem', background: 'var(--accent-primary)', color: '#000', padding: '2px 8px', borderRadius: '12px', fontWeight: 700 }}>🚗 A CAMINHO</span>}
+                              {item.isOnWay && <span style={{ fontSize: '0.7rem', background: 'var(--accent-primary)', color: 'var(--accent-secondary)', padding: '2px 8px', borderRadius: '12px', fontWeight: 700 }}>🚗 A CAMINHO</span>}
                             </h4>
                             <span className="item-service">{item.serviceName} {item.appointmentTime ? `• 🕒 ${formatTimeISO(item.appointmentTime)}` : ''}</span>
                             {item.status === 'serving' && item.startedAt && <TimeElapsed startedAt={item.startedAt} />}
@@ -1618,7 +2014,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                                 <button 
                                   onClick={() => handleCallClient(item.id)} 
                                   className="action-btn call" 
-                                  style={{ background: item.status === 'ready' ? '#f1f5f9' : 'var(--accent-primary)', color: item.status === 'ready' ? '#64748b' : '#000', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 700, fontSize: '0.8rem', cursor: 'pointer' }}
+                                  style={{ background: item.status === 'ready' ? '#f1f5f9' : 'var(--accent-primary)', color: item.status === 'ready' ? '#64748b' : 'var(--accent-secondary)', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 700, fontSize: '0.8rem', cursor: 'pointer' }}
                                 >
                                   {item.status === 'ready' ? 'Chamado ✓' : 'Chamar'}
                                 </button>
@@ -1632,13 +2028,244 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                               </>
                             )}
                           </div>
-                          <button onClick={() => handleRemoveFromQueue(item.id)} className="btn-action-remove">✕</button>
+                          <button onClick={() => handleRemoveFromQueue(item)} className="btn-action-remove">✕</button>
                         </div>
                       ))}
                     </div>
                   </div>
                 </div>
-              )}
+              ) : activeTab === 'agenda' ? (
+                <div className="admin-dashboard-container fade-in">
+                  <div className="agenda-view-wrapper" style={{ padding: '0.5rem' }}>
+                    <div className="section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2.5rem' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                        <div>
+                          <h2 style={{ fontSize: '1.75rem', fontWeight: 900, letterSpacing: '-0.5px', marginBottom: '0.5rem' }}>Cronograma de Agendamentos</h2>
+                          <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem' }}>Gerencie suas reservas e solicitações futuras.</p>
+                        </div>
+                        
+                        {/* Integrated Date Picker Filter */}
+                        <div className="agenda-date-filter" style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,0.03)', padding: '8px 16px', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.05)', width: 'fit-content' }}>
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                          <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Filtrar por data:</span>
+                          <input 
+                            type="date" 
+                            value={adminSelectedDate}
+                            onChange={(e) => {
+                              setAdminSelectedDate(e.target.value);
+                              setSelectedDate(e.target.value);
+                            }}
+                            style={{ 
+                              background: 'transparent', 
+                              border: 'none', 
+                              color: 'var(--text-primary)', 
+                              fontSize: '0.9rem', 
+                              fontWeight: 800, 
+                              cursor: 'pointer',
+                              outline: 'none',
+                              padding: '4px'
+                            }}
+                          />
+                          {adminSelectedDate !== todayStr && (
+                            <button 
+                              onClick={() => setAdminSelectedDate(todayStr)}
+                              style={{ background: 'rgba(var(--accent-primary-rgb), 0.1)', color: 'var(--accent-primary)', border: 'none', padding: '4px 10px', borderRadius: '8px', fontSize: '0.7rem', fontWeight: 900, cursor: 'pointer' }}
+                            >
+                              HOJE
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="agenda-stats" style={{ display: 'flex', gap: '1.5rem' }}>
+                        <div style={{ textAlign: 'right' }}>
+                          <span style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Total de Agendamentos</span>
+                          <span style={{ fontSize: '1.5rem', fontWeight: 900, color: 'var(--accent-primary)' }}>{futureAgenda.length}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {filteredAgenda.length === 0 ? (
+                      <div className="premium-empty-state" style={{ padding: '8rem 2rem', textAlign: 'center', borderRadius: '32px', background: 'rgba(255,255,255,0.01)', border: '2px dashed rgba(255,255,255,0.05)' }}>
+                        <div style={{ width: '100px', height: '100px', background: 'linear-gradient(135deg, rgba(var(--accent-primary-rgb), 0.1), transparent)', borderRadius: '30px', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 2rem' }}>
+                          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="1.5" opacity="0.8"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                        </div>
+                        <h3 style={{ fontSize: '1.5rem', fontWeight: 800, marginBottom: '0.75rem' }}>Agenda livre para este dia</h3>
+                        <p style={{ color: 'var(--text-secondary)', maxWidth: '350px', margin: '0 auto 2rem', fontSize: '1rem', lineHeight: '1.6' }}>Não há compromissos marcados para {adminSelectedDate === todayStr ? 'hoje' : 'esta data'}.</p>
+                        <button 
+                          onClick={() => setIsAdminAddModalOpen(true)}
+                          className="btn-submit"
+                          style={{ width: 'auto', padding: '0 32px', height: '52px', borderRadius: '16px' }}
+                        >
+                          + Novo Agendamento
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="agenda-timeline" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: '3.5rem' }}>
+                        {/* Timeline vertical line */}
+                        <div style={{ position: 'absolute', left: '26px', top: '10px', bottom: '10px', width: '2px', background: 'linear-gradient(to bottom, rgba(var(--accent-primary-rgb), 0.2), transparent)', zIndex: 0 }}></div>
+
+                        <div className="agenda-day-group" style={{ position: 'relative', zIndex: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '1.5rem' }}>
+                            <div style={{ 
+                              width: '54px', 
+                              height: '54px', 
+                              background: adminSelectedDate === todayStr ? 'var(--accent-primary)' : 'var(--bg-surface)', 
+                              color: adminSelectedDate === todayStr ? 'var(--accent-secondary)' : 'var(--text-primary)',
+                              borderRadius: '18px', 
+                              display: 'flex', 
+                              flexDirection: 'column', 
+                              alignItems: 'center', 
+                              justifyContent: 'center',
+                              boxShadow: '0 8px 16px rgba(0,0,0,0.1)',
+                              border: '1px solid rgba(255,255,255,0.05)'
+                            }}>
+                              <span style={{ fontSize: '0.7rem', fontWeight: 800, opacity: 0.8, textTransform: 'uppercase' }}>
+                                {new Date(adminSelectedDate + 'T12:00:00').toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '')}
+                              </span>
+                              <span style={{ fontSize: '1.25rem', fontWeight: 900, lineHeight: 1 }}>
+                                {new Date(adminSelectedDate + 'T12:00:00').getDate()}
+                              </span>
+                            </div>
+                            <div>
+                              <h3 style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0, textTransform: 'capitalize' }}>
+                                {new Date(adminSelectedDate + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long' })}
+                              </h3>
+                              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0, opacity: 0.6 }}>
+                                {filteredAgenda.length} {filteredAgenda.length === 1 ? 'atendimento' : 'atendimentos'} agendados
+                              </p>
+                            </div>
+                          </div>
+
+                          <div style={{ paddingLeft: '74px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: '1.25rem' }}>
+                            {filteredAgenda.map(item => (
+                              <div key={item.id} className="premium-agenda-card" style={{ 
+                                padding: '1.5rem', 
+                                background: 'var(--bg-surface)', 
+                                borderRadius: '24px', 
+                                display: 'flex', 
+                                alignItems: 'center', 
+                                gap: '1.25rem', 
+                                border: '1px solid rgba(255,255,255,0.03)',
+                                boxShadow: '0 4px 20px rgba(0,0,0,0.05)',
+                                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                                position: 'relative',
+                                overflow: 'hidden'
+                              }}>
+                                {/* Status indicator bar */}
+                                <div style={{ 
+                                  position: 'absolute', 
+                                  left: 0, 
+                                  top: 0, 
+                                  bottom: 0, 
+                                  width: '4px', 
+                                  background: item.status === 'pending' ? '#f59e0b' : 'var(--accent-primary)' 
+                                }}></div>
+
+                                <div style={{ 
+                                  width: '64px', 
+                                  height: '64px', 
+                                  background: 'rgba(255,255,255,0.02)', 
+                                  borderRadius: '16px', 
+                                  display: 'flex', 
+                                  flexDirection: 'column', 
+                                  alignItems: 'center', 
+                                  justifyContent: 'center', 
+                                  flexShrink: 0,
+                                  border: '1px solid rgba(255,255,255,0.05)'
+                                }}>
+                                  <span style={{ fontSize: '1.1rem', fontWeight: 900, color: 'var(--text-primary)' }}>
+                                    {item.appointmentTime ? formatTimeISO(item.appointmentTime) : '--:--'}
+                                  </span>
+                                </div>
+
+                                <div style={{ flexGrow: 1, minWidth: 0 }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                                    <h4 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name}</h4>
+                                    {item.status === 'pending' && (
+                                      <span className="pulse-badge" style={{ fontSize: '0.6rem', background: '#f59e0b', color: '#fff', padding: '3px 8px', borderRadius: '6px', fontWeight: 900, letterSpacing: '0.5px' }}>SOLICITAÇÃO</span>
+                                    )}
+                                  </div>
+                                  <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', margin: 0, opacity: 0.8, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    <span style={{ fontWeight: 600 }}>{item.serviceName}</span>
+                                    <span style={{ opacity: 0.4 }}>•</span>
+                                    <span>{item.duration || 30} min</span>
+                                  </p>
+                                </div>
+
+                                <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                                  {item.status === 'pending' ? (
+                                    <>
+                                      <button 
+                                        onClick={() => handleApproveAppointment(item.id)}
+                                        className="approve-btn"
+                                        title="Confirmar"
+                                        style={{ 
+                                          width: '40px', 
+                                          height: '40px', 
+                                          background: '#10b981', 
+                                          color: '#fff', 
+                                          border: 'none', 
+                                          borderRadius: '12px', 
+                                          cursor: 'pointer', 
+                                          display: 'flex', 
+                                          alignItems: 'center', 
+                                          justifyContent: 'center',
+                                          transition: 'transform 0.2s'
+                                        }}
+                                      >
+                                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                      </button>
+                                      <button 
+                                        onClick={() => handleRejectAppointment(item)}
+                                        className="reject-btn"
+                                        title="Recusar"
+                                        style={{ 
+                                          width: '40px', 
+                                          height: '40px', 
+                                          background: 'rgba(239, 68, 68, 0.1)', 
+                                          color: '#ef4444', 
+                                          border: 'none', 
+                                          borderRadius: '12px', 
+                                          cursor: 'pointer', 
+                                          display: 'flex', 
+                                          alignItems: 'center', 
+                                          justifyContent: 'center',
+                                          transition: 'transform 0.2s'
+                                        }}
+                                      >
+                                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <button 
+                                      onClick={() => handleRemoveFromQueue(item)}
+                                      style={{ 
+                                        width: '40px', 
+                                        height: '40px', 
+                                        background: 'rgba(255,255,255,0.03)', 
+                                        color: '#ef4444', 
+                                        border: 'none', 
+                                        borderRadius: '12px', 
+                                        cursor: 'pointer', 
+                                        display: 'flex', 
+                                        alignItems: 'center', 
+                                        justifyContent: 'center',
+                                        opacity: 0.4
+                                      }}
+                                    >
+                                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : null}
 
             </div>
           </main>
@@ -1752,7 +2379,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                           <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{item.serviceName}</span>
                         </div>
                         <span className={`status-badge ${item.status}`} style={{ fontSize: '0.7rem' }}>
-                          {item.status === 'serving' ? 'Atendendo' : item.status === 'ready' ? 'Sua Vez!' : 'Na Fila'}
+                          {item.status === 'serving' ? 'Atendendo' : item.status === 'ready' ? 'Sua Vez!' : (tenant.bookingType === 'appointment' ? (item.status === 'pending' ? 'Pendente' : 'Confirmado') : 'Na Fila')}
                         </span>
                       </div>
 
@@ -1835,17 +2462,23 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                     </div>
                   ))}
 
-                  <button 
-                    onClick={() => {
-                      setForceShowJoinForm(true);
-                      setName('');
-                      setCustomerWhatsapp('');
-                    }} 
-                    className="btn-submit"
-                    style={{ background: 'var(--accent-primary)', color: '#000', marginTop: '1rem' }}
-                  >
-                    + Adicionar Outra Pessoa
-                  </button>
+                  {myItemsInQueue.length < 4 ? (
+                    <button 
+                      onClick={() => {
+                        setForceShowJoinForm(true);
+                        setName('');
+                        setCustomerWhatsapp('');
+                      }} 
+                      className="btn-submit"
+                      style={{ background: 'var(--accent-primary)', color: 'var(--accent-secondary)', marginTop: '1rem' }}
+                    >
+                      + Adicionar Outra Pessoa (Acompanhante)
+                    </button>
+                  ) : (
+                    <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'rgba(239, 68, 68, 0.05)', borderRadius: '12px', border: '1px solid rgba(239, 68, 68, 0.1)', textAlign: 'center', color: '#ef4444', fontSize: '0.85rem', fontWeight: 600 }}>
+                      ⚠️ Limite máximo de 3 acompanhantes atingido.
+                    </div>
+                  )}
                 </div>
               ) : (
                 <form onSubmit={handleJoinQueue} className="join-form">
@@ -1971,23 +2604,88 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
             {/* Queue Section */}
             <section className="queue-panel">
-               <div className="queue-header">
-                <h2>Acompanhe a Fila</h2>
-              </div>
-              <div className="queue-list" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                {queue.map((item, index) => (
-                  <div key={item.id} className={`queue-item glass-card ${item.status}`} style={{ padding: '1.25rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                    <div style={{ fontSize: '1.2rem', fontWeight: 800, opacity: 0.6, minWidth: '60px', color: item.status === 'ready' ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>
-                      {tenant.bookingType === 'appointment' && item.appointmentTime ? formatTimeISO(item.appointmentTime) : `${index + 1}º`}
-                    </div>
-                    <div style={{ flexGrow: 1 }}>
-                      <h4 style={{ color: 'var(--text-primary)' }}>{item.name}</h4>
-                      <span style={{ fontSize: '0.8rem', opacity: 0.6 }}>{item.serviceName}</span>
-                      {item.status === 'serving' && item.startedAt && <TimeElapsed startedAt={item.startedAt} />}
-                    </div>
-                    <span className={`status-badge ${item.status}`}>{item.status === 'serving' ? 'Atendendo' : 'Aguardando'}</span>
+               <div className="queue-header" style={{ marginBottom: '2rem' }}>
+                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1rem', flexWrap: 'wrap', gap: '1.25rem' }}>
+                  <div style={{ flex: 1, minWidth: '250px' }}>
+                    <h2 style={{ margin: '0 0 6px 0' }}>{tenant.bookingType === 'appointment' ? 'Acompanhe a Agenda' : 'Acompanhe a Fila'}</h2>
+                    <p style={{ fontSize: '0.95rem', color: 'var(--text-secondary)', margin: 0, opacity: 0.9, lineHeight: '1.5' }}>
+                      {tenant.bookingType === 'appointment' 
+                        ? 'Deseja consultar a disponibilidade para outros dias? Selecione uma data ao lado para conferir os horários.' 
+                        : 'Deseja ver o movimento da fila para outros dias? Use o seletor de data ao lado.'}
+                    </p>
                   </div>
-                ))}
+                  <div className="client-date-filter" style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(var(--accent-primary-rgb), 0.05)', padding: '8px 16px', borderRadius: '16px', border: '1px solid rgba(var(--accent-primary-rgb), 0.1)', height: 'fit-content' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="2.5"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                      <input 
+                        type="date" 
+                        value={selectedDate}
+                        onChange={(e) => {
+                          setSelectedDate(e.target.value);
+                          setSelectedTimeSlot('');
+                        }}
+                        style={{ 
+                          background: 'transparent', 
+                          border: 'none', 
+                          color: 'var(--text-primary)', 
+                          fontSize: '0.9rem', 
+                          fontWeight: 800, 
+                          outline: 'none',
+                          cursor: 'pointer',
+                          fontFamily: 'inherit'
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="queue-list" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                {groupedClientQueue[selectedDate] && groupedClientQueue[selectedDate].filter(i => i.status !== 'cancelled').length > 0 ? (
+                  <div className="client-day-group fade-in">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '1.25rem' }}>
+                      <span style={{ fontSize: '0.8rem', fontWeight: 800, color: 'var(--accent-primary)', textTransform: 'uppercase', background: 'rgba(var(--accent-primary-rgb), 0.1)', padding: '4px 10px', borderRadius: '8px' }}>
+                        {selectedDate === todayStr ? 'Hoje' : new Date(selectedDate + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
+                      </span>
+                      <span style={{ fontSize: '0.9rem', fontWeight: 600, opacity: 0.6 }}>
+                        {new Date(selectedDate + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long' })}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                      {groupedClientQueue[selectedDate]
+                        .filter(item => item.status !== 'cancelled')
+                        .sort((a,b) => (a.appointmentTime||a.joinedAt).localeCompare(b.appointmentTime||b.joinedAt))
+                        .map((item, index) => (
+                        <div key={item.id} className={`queue-item glass-card ${item.status}`} style={{ padding: '1.25rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                          <div style={{ fontSize: '1.2rem', fontWeight: 800, opacity: 0.6, minWidth: '60px', color: item.status === 'ready' ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>
+                            {tenant.bookingType === 'appointment' && item.appointmentTime ? formatTimeISO(item.appointmentTime) : `${index + 1}º`}
+                          </div>
+                          <div style={{ flexGrow: 1 }}>
+                            <h4 style={{ color: 'var(--text-primary)', marginBottom: '4px' }}>{item.name}</h4>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                              <span style={{ fontSize: '0.8rem', opacity: 0.7, fontWeight: 500 }}>{item.serviceName}</span>
+                              <span style={{ fontSize: '0.75rem', color: 'var(--accent-primary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                                Tempo estimado: {item.duration || 30} min
+                              </span>
+                            </div>
+                            {item.status === 'serving' && item.startedAt && <TimeElapsed startedAt={item.startedAt} />}
+                          </div>
+                          <span className={`status-badge ${item.status}`}>{item.status === 'serving' ? 'Atendendo' : (tenant.bookingType === 'appointment' ? (item.status === 'pending' ? 'Pendente' : 'Confirmado') : 'Aguardando')}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="premium-empty-state" style={{ padding: '4rem 2rem', textAlign: 'center', borderRadius: '32px', background: 'rgba(255,255,255,0.01)', border: '2px dashed rgba(255,255,255,0.05)' }}>
+                    <div style={{ width: '80px', height: '80px', background: 'linear-gradient(135deg, rgba(var(--accent-primary-rgb), 0.1), transparent)', borderRadius: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem' }}>
+                      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="1.5" opacity="0.6"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                    </div>
+                    <h3 style={{ fontSize: '1.25rem', fontWeight: 800, marginBottom: '0.5rem', color: 'var(--text-primary)' }}>Agenda livre para este dia</h3>
+                    <p style={{ color: 'var(--text-secondary)', maxWidth: '300px', margin: '0 auto', fontSize: '0.95rem', lineHeight: '1.5' }}>
+                      {selectedDate === todayStr ? 'Não há compromissos marcados para hoje.' : `Não há compromissos marcados para o dia ${new Date(selectedDate + 'T12:00:00').toLocaleDateString('pt-BR')}.`}
+                    </p>
+                  </div>
+                )}
               </div>
             </section>
           </main>
@@ -2003,7 +2701,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
             </div>
             <h3 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>Sucesso!</h3>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem' }}>Seu lugar na fila foi reservado com sucesso.</p>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem' }}>{tenant.bookingType === 'appointment' ? 'Seu horário foi agendado com sucesso.' : 'Seu lugar na fila foi reservado com sucesso.'}</p>
             <button onClick={() => setShowConfirmation(false)} className="btn-submit">Entendi</button>
           </div>
         </div>
@@ -2024,7 +2722,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
               </p>
             </div>
             <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem', fontSize: '0.9rem' }}>
-              Deseja entrar na fila agora?
+              {tenant.bookingType === 'appointment' ? 'Deseja confirmar este agendamento?' : 'Deseja entrar na fila agora?'}
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <button 
@@ -2052,7 +2750,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
             </div>
             <h3 style={{ fontSize: '1.5rem', marginBottom: '0.75rem', color: 'var(--text-primary)' }}>Remover {itemForCancel?.name}?</h3>
             <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem', fontSize: '0.95rem', lineHeight: '1.5' }}>
-              Esta pessoa será removida da fila e perderá a posição atual.
+              {tenant.bookingType === 'appointment' ? 'Este agendamento será cancelado e o horário ficará disponível para outros.' : 'Esta pessoa será removida da fila e perderá a posição atual.'}
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <button 
@@ -2067,7 +2765,38 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                 className="btn-secondary" 
                 style={{ border: '1px solid rgba(0,0,0,0.1)', width: '100%' }}
               >
-                Manter na fila
+                {tenant.bookingType === 'appointment' ? 'Manter agendamento' : 'Manter na fila'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Delete Confirmation Modal */}
+      {showAdminDeleteModal && (
+        <div className="modal-overlay" style={{ zIndex: 10005 }}>
+          <div className="modal-content glass-panel fade-in" style={{ maxWidth: '400px', textAlign: 'center', padding: '2.5rem' }}>
+            <div style={{ width: '64px', height: '64px', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem', color: '#ef4444' }}>
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path><line x1="12" y1="2" x2="12" y2="12"></line></svg>
+            </div>
+            <h3 style={{ fontSize: '1.5rem', marginBottom: '0.75rem', color: 'var(--text-primary)' }}>Remover Cliente?</h3>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem', fontSize: '0.95rem', lineHeight: '1.5' }}>
+              Você está prestes a remover <strong>{itemToDelete?.name}</strong> da fila. Esta ação não pode ser desfeita.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <button 
+                onClick={confirmAdminDelete} 
+                className="btn-submit" 
+                style={{ background: '#ef4444', color: '#fff', border: 'none' }}
+              >
+                Sim, remover da fila
+              </button>
+              <button 
+                onClick={() => { setShowAdminDeleteModal(false); setItemToDelete(null); }} 
+                className="btn-secondary" 
+                style={{ border: '1px solid rgba(0,0,0,0.1)', width: '100%' }}
+              >
+                Manter cliente
               </button>
             </div>
           </div>
@@ -2141,6 +2870,57 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                 );
               })}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Service Management Modal */}
+      {showServiceModal && (
+        <div className="modal-overlay fade-in">
+          <div className="modal-content glass-panel" style={{ maxWidth: '450px' }}>
+            <div className="modal-header">
+              <h3 style={{ fontSize: '1.25rem' }}>{editingService ? 'Editar Serviço' : 'Novo Serviço'}</h3>
+              <button onClick={() => setShowServiceModal(false)} className="btn-close-modal">✕</button>
+            </div>
+            <form onSubmit={handleSaveService} className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+              <div className="form-group">
+                <label style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 700 }}>Nome do Serviço</label>
+                <input 
+                  type="text" 
+                  value={newServiceName} 
+                  onChange={e => setNewServiceName(e.target.value)}
+                  placeholder="ex: Corte Social" 
+                  className="premium-input"
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 700 }}>Preço (R$)</label>
+                <input 
+                  type="text" 
+                  value={newServicePrice} 
+                  onChange={e => setNewServicePrice(e.target.value)}
+                  placeholder="ex: 35,00" 
+                  className="premium-input"
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 700 }}>Duração (minutos)</label>
+                <input 
+                  type="number" 
+                  value={newServiceDuration} 
+                  onChange={e => setNewServiceDuration(e.target.value)}
+                  placeholder="ex: 45" 
+                  className="premium-input"
+                  required
+                />
+              </div>
+              <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+                <button type="button" onClick={() => setShowServiceModal(false)} className="btn-secondary" style={{ flex: 1 }}>Cancelar</button>
+                <button type="submit" className="btn-submit" style={{ flex: 2, background: '#0f172a', color: '#fff' }}>{editingService ? 'Salvar Alterações' : 'Adicionar Serviço'}</button>
+              </div>
+            </form>
           </div>
         </div>
       )}
