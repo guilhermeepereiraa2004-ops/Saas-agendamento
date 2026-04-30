@@ -2386,10 +2386,18 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                       <div className="my-status-monitor fade-in" style={{ marginBottom: '1rem' }}>
                         <div className="monitor-glow"></div>
                         <div className="monitor-content">
-                          <p className="monitor-label">Posição Atual</p>
-                          <div className="monitor-value">{queue.findIndex(q => q.id === item.id) + 1}º</div>
+                          <p className="monitor-label">{item.status === 'serving' ? 'Status Atual' : 'Posição Atual'}</p>
+                          <div className="monitor-value">
+                            {item.status === 'serving' 
+                              ? <span style={{ fontSize: '2.5rem' }}>VOCÊ</span> 
+                              : `${todayQueue.findIndex(q => q.id === item.id) + 1}º`}
+                          </div>
                           <p className="monitor-subtext">
-                            {queue.findIndex(q => q.id === item.id) === 0 ? 'Próximo da fila!' : 'Aguarde sua vez'}
+                            {item.status === 'serving' 
+                              ? 'Você está em atendimento agora!' 
+                              : todayQueue.findIndex(q => q.id === item.id) === 0 
+                                ? 'Próximo da fila!' 
+                                : 'Aguarde sua vez'}
                           </p>
                         </div>
                         <div className="monitor-footer">
