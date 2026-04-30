@@ -162,11 +162,23 @@ export const sendPushNotification = async (pushId: string, title: string, messag
         contents: { en: message, pt: message },
         headings: { en: title, pt: title },
         url: url, // Link para redirecionamento
-        priority: 10, // Prioridade alta para "pular" na tela
-        ttl: 3600, // Notificação expira em 1 hora se não for entregue
-        android_visibility: 1, // Torna visível na tela de bloqueio
-        chrome_web_icon: window.location.origin + '/logo_suavez.png', // Logo Sua Vez
-        icon: window.location.origin + '/logo_suavez.png' // Ícone padrão
+        priority: 10, // Prioridade máxima
+        ttl: 3600,
+        android_visibility: 1, // Visível na tela de bloqueio
+        android_accent_color: "FF0000FF", // Cor azul para o ícone no Android
+        chrome_web_icon: window.location.origin + '/logo_suavez.png',
+        chrome_web_badge: window.location.origin + '/logo_suavez.png', // Badge pequeno
+        icon: window.location.origin + '/logo_suavez.png',
+        
+        // Parâmetros críticos para "pular" na tela (Web Push / Mobile)
+        web_push_topic: "atendimento", // Agrupa notificações relacionadas
+        renotify: true, // Força vibração/som mesmo se já houver notificação anterior
+        require_interaction: true, // Mantém na tela até o usuário interagir
+        
+        // Sons e vibração
+        android_sound: "notification", // Som padrão do sistema
+        android_led_color: "FF0000FF",
+        android_group: "atendimentos_suavez"
       })
     });
     
