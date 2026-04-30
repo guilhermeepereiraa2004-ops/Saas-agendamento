@@ -1,0 +1,24 @@
+{
+  "name": "Sua Vez - Atendimento",
+  "short_name": "Sua Vez",
+  "description": "Gestão de Atendimento Inteligente e Fila Virtual",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/logo_suavez.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/logo_suavez.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
