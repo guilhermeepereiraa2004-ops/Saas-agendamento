@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import type { Tenant, Service, Profession } from './types';
+import type { Tenant, Profession } from './types';
 import { supabase } from './lib/supabase';
 import { PROFESSION_CONFIG } from './lib/professionConfig';
 import { useToasts } from './components/ToastProvider';
