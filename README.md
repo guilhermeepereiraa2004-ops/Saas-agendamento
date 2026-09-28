@@ -11,13 +11,19 @@ Sistema de gerenciamento de filas e agendamentos multirrecursos (barbearias, lav
    - **Build Command**: `npm run build`.
    - **Output Directory**: `dist`.
 3. **Variáveis de Ambiente**:
-   No campo "Environment Variables", adicione as seguintes chaves do seu projeto Supabase:
+   No campo "Environment Variables", adicione:
    - `VITE_SUPABASE_URL`: (Copie a URL do seu painel Supabase)
    - `VITE_SUPABASE_ANON_KEY`: (Copie a chave anônima do seu painel Supabase)
+   - `VITE_ONESIGNAL_APP_ID`: ID público do aplicativo no OneSignal.
+   - `ONESIGNAL_REST_API_KEY`: chave REST privada do OneSignal. Esta variável é usada somente pela função `/api/send-push` e **nunca deve receber o prefixo `VITE_`**.
+   - `APP_ORIGIN`: domínio canônico da aplicação, por exemplo `https://suavez.app`.
+
+   Se uma chave REST já foi publicada anteriormente como `VITE_ONESIGNAL_REST_API_KEY`, gere uma nova chave no OneSignal, configure `ONESIGNAL_REST_API_KEY` na Vercel e revogue a antiga.
 
 ## 🛠️ Tecnologias
-- **Frontend**: React 19 + TypeScript + Vite 6
+- **Frontend**: React 19 + TypeScript + Vite 8
 - **Backend**: Supabase (Database & Autenticação)
+- **Push**: OneSignal via função server-side da Vercel
 - **Styling**: CSS Moderno (Vanilla/Native)
 
 ## 📦 Comandos Locais

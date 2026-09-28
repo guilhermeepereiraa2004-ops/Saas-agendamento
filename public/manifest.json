@@ -1,11 +1,11 @@
 {
   "name": "Sua Vez - Atendimento",
   "short_name": "Sua Vez",
-  "description": "Gestão de Atendimento Inteligente e Fila Virtual",
+  "description": "Gestão de atendimento, agenda e fila virtual",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0f172a",
-  "theme_color": "#0f172a",
+  "background_color": "#f5f1e8",
+  "theme_color": "#173f32",
   "orientation": "portrait",
   "icons": [
     {

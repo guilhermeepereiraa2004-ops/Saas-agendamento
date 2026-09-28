@@ -541,6 +541,44 @@
   opacity: 1;
 }
 
+.profession-select-field {
+  position: relative;
+}
+
+.admin-content .profession-select-field select {
+  appearance: none;
+  min-height: 56px;
+  padding-left: 58px;
+  padding-right: 48px;
+}
+
+.profession-select-preview {
+  position: absolute;
+  z-index: 1;
+  left: 10px;
+  top: 50%;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  transform: translateY(-50%);
+  border: 1px solid rgba(23, 63, 50, .08);
+  border-radius: 12px;
+  background: #edf4ea;
+  color: #22694d;
+  pointer-events: none;
+}
+
+.profession-select-chevron {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
 .admin-credential-box {
   margin-top: 2rem;
   padding: 2rem;

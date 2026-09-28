@@ -1,9 +1,28 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import type { Tenant, Profession } from './types';
 import { supabase } from './lib/supabase';
 import { PROFESSION_CONFIG } from './lib/professionConfig';
-import { useToasts } from './components/ToastProvider';
+import { useToasts } from './lib/toast';
+import { ProfessionIcon } from './components/ProfessionIcon';
 import './SuperAdminRedesign.css';
+
+interface TenantDraft {
+  name: string;
+  slug: string;
+  whatsapp: string;
+  primaryColor: string;
+  hasLogo: boolean;
+  logoUrl: string;
+  loginEmail: string;
+  loginPassword: string;
+  profession: Profession;
+  bookingType: 'queue' | 'appointment';
+  subscriptionStatus: Tenant['subscriptionStatus'];
+  nextPaymentAt: string;
+  paymentDay: number;
+  monthlyFee: number;
+  secondaryColor: string;
+}
 
 export default function SuperAdmin() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
@@ -40,11 +59,7 @@ export default function SuperAdmin() {
   const [financialSearch, setFinancialSearch] = useState('');
   const [financialFilter, setFinancialFilter] = useState('all');
 
-  useEffect(() => {
-    fetchTenants();
-  }, []);
-
-  const fetchTenants = async () => {
+  const fetchTenants = useCallback(async () => {
     // Fetch tenants
     const { data, error } = await supabase.from('tenants').select('*').order('created_at', { ascending: false });
     
@@ -80,7 +95,12 @@ export default function SuperAdmin() {
       }));
       setTenants(mapped);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    const initialLoad = window.setTimeout(() => void fetchTenants(), 0);
+    return () => window.clearTimeout(initialLoad);
+  }, [fetchTenants]);
 
   const handleToggleActive = async (tenantId: string, currentState: boolean, tenantName: string) => {
     const next = !currentState;
@@ -96,7 +116,7 @@ export default function SuperAdmin() {
     }
   };
 
-  const saveTenantToSupabase = async (tenantData: any) => {
+  const saveTenantToSupabase = async (tenantData: TenantDraft) => {
     setLoading(true);
     const dbData = {
       name: tenantData.name,
@@ -450,13 +470,16 @@ export default function SuperAdmin() {
 
                     <div className="form-group">
                       <label>Tipo de Negócio</label>
-                      <div style={{ position: 'relative' }}>
-                        <select value={profession} onChange={e => setProfession(e.target.value as Profession)} style={{ appearance: 'none' }}>
+                      <div className="profession-select-field">
+                        <span className="profession-select-preview" aria-hidden="true">
+                          <ProfessionIcon profession={profession} size={25} />
+                        </span>
+                        <select value={profession} onChange={e => setProfession(e.target.value as Profession)}>
                           {(Object.entries(PROFESSION_CONFIG) as [Profession, typeof PROFESSION_CONFIG[Profession]][]).map(([key, cfg]) => (
                             <option key={key} value={key}>{cfg.label}</option>
                           ))}
                         </select>
-                        <div style={{ position: 'absolute', right: '16px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}>
+                        <div className="profession-select-chevron" aria-hidden="true">
                           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                         </div>
                       </div>
@@ -550,7 +573,7 @@ export default function SuperAdmin() {
                        </div>
                        <div className="form-group">
                          <label>Status</label>
-                         <select value={subscriptionStatus} onChange={e => setSubscriptionStatus(e.target.value as any)}>
+                         <select value={subscriptionStatus} onChange={e => setSubscriptionStatus(e.target.value as Tenant['subscriptionStatus'])}>
                            <option value="active">Ativo</option>
                            <option value="overdue">Atrasado</option>
                            <option value="pending">Pendente</option>
@@ -871,7 +894,7 @@ export default function SuperAdmin() {
 
               <div className="form-group">
                 <label>Status do Pagamento</label>
-                <select value={subscriptionStatus} onChange={e => setSubscriptionStatus(e.target.value as any)}>
+                <select value={subscriptionStatus} onChange={e => setSubscriptionStatus(e.target.value as Tenant['subscriptionStatus'])}>
                   <option value="active">Ativo (Em dia)</option>
                   <option value="overdue">Atrasado (Inadimplente)</option>
                   <option value="pending">Pendente</option>

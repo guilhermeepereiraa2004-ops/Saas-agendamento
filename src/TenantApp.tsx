@@ -1,11 +1,154 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import './App.css';
 import type { QueueItem, Tenant, TenantTask, TenantProduct, Service } from './types';
 import { supabase } from './lib/supabase';
 import FinancialView from './FinancialView';
 import { getProfessionConfig } from './lib/professionConfig';
-import { useToasts } from './components/ToastProvider';
-import { loginOneSignal, requestNotificationPermission, getOneSignalId, sendPushNotification, isNotificationEnabled } from './components/OneSignalInitializer';
+import { useToasts } from './lib/toast';
+import { requestNotificationPermission, getOneSignalId, sendPushNotification, isNotificationEnabled } from './lib/oneSignal';
+import { BrandMark } from './LandingPage';
+import { ProfessionIcon } from './components/ProfessionIcon';
+
+type RgbColor = [number, number, number];
+type AdminTab = 'atendimento' | 'agenda' | 'financial' | 'tasks' | 'store' | 'services' | 'scheduling' | 'settings';
+type WorkingHours = NonNullable<Tenant['workingHours']>;
+
+interface QueueRow {
+  id: string;
+  name: string;
+  whatsapp: string;
+  service_id: string;
+  service_name: string;
+  price: string | number;
+  status: QueueItem['status'];
+  joined_at: string;
+  appointment_time?: string;
+  is_on_way?: boolean;
+  push_id?: string;
+  started_at?: string;
+  duration?: number;
+}
+
+interface TaskRow {
+  id: string;
+  tenant_id: string;
+  title: string;
+  is_completed: boolean;
+  created_at: string;
+}
+
+interface ProductRow {
+  id: string;
+  tenant_id: string;
+  name: string;
+  price: string | number;
+  image_url?: string;
+  created_at: string;
+}
+
+const ADMIN_TAB_META: Record<AdminTab, { eyebrow: string; title: string; description: string }> = {
+  atendimento: {
+    eyebrow: 'Operação em tempo real',
+    title: 'Atendimento de hoje',
+    description: 'Acompanhe o movimento e conduza cada cliente até a conclusão.',
+  },
+  agenda: {
+    eyebrow: 'Planejamento',
+    title: 'Agenda de compromissos',
+    description: 'Confirme solicitações e organize os horários reservados.',
+  },
+  financial: {
+    eyebrow: 'Visão do negócio',
+    title: 'Financeiro',
+    description: 'Receitas, despesas e resultado do estabelecimento em um só lugar.',
+  },
+  tasks: {
+    eyebrow: 'Organização',
+    title: 'Tarefas',
+    description: 'Registre pendências e mantenha a rotina da equipe em dia.',
+  },
+  store: {
+    eyebrow: 'Catálogo',
+    title: 'Produtos',
+    description: 'Apresente aos clientes os produtos usados e recomendados por você.',
+  },
+  services: {
+    eyebrow: 'Catálogo',
+    title: 'Serviços',
+    description: 'Gerencie nomes, duração e valores dos seus atendimentos.',
+  },
+  scheduling: {
+    eyebrow: 'Preferências de operação',
+    title: 'Atendimento e horários',
+    description: 'Defina o modelo de atendimento e, quando necessário, o expediente.',
+  },
+  settings: {
+    eyebrow: 'Identidade do estabelecimento',
+    title: 'Perfil e aparência',
+    description: 'Personalize contato e cores que seus clientes verão.',
+  },
+};
+
+function parseHexColor(value: string): RgbColor | null {
+  const normalized = value.trim().replace('#', '');
+  const expanded = normalized.length === 3
+    ? normalized.split('').map(char => char + char).join('')
+    : normalized;
+
+  if (!/^[\da-f]{6}$/i.test(expanded)) return null;
+
+  return [
+    parseInt(expanded.slice(0, 2), 16),
+    parseInt(expanded.slice(2, 4), 16),
+    parseInt(expanded.slice(4, 6), 16),
+  ];
+}
+
+function relativeLuminance([red, green, blue]: RgbColor) {
+  const channels = [red, green, blue].map(channel => {
+    const value = channel / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+
+  return (0.2126 * channels[0]) + (0.7152 * channels[1]) + (0.0722 * channels[2]);
+}
+
+function contrastRatio(first: RgbColor, second: RgbColor) {
+  const lighter = Math.max(relativeLuminance(first), relativeLuminance(second));
+  const darker = Math.min(relativeLuminance(first), relativeLuminance(second));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function getReadableAccentText(background: string, preferred: string) {
+  const backgroundRgb = parseHexColor(background) || [16, 18, 24] as RgbColor;
+  const preferredRgb = parseHexColor(preferred);
+
+  if (preferredRgb && contrastRatio(backgroundRgb, preferredRgb) >= 4.5) return preferred;
+
+  const white: RgbColor = [255, 255, 255];
+  const ink: RgbColor = [17, 19, 24];
+  return contrastRatio(backgroundRgb, white) >= contrastRatio(backgroundRgb, ink) ? '#ffffff' : '#111318';
+}
+
+function hexToRgbString(value: string) {
+  return (parseHexColor(value) || [212, 175, 55]).join(', ');
+}
+
+function parseMoneyInput(value: string) {
+  const normalized = value.trim().replace(/\s/g, '').replace(/\.(?=\d{3}(?:\D|$))/g, '').replace(',', '.');
+  const amount = Number(normalized);
+  return Number.isFinite(amount) && amount >= 0 ? amount : null;
+}
+
+function toLocalDateInputValue(date: Date) {
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().split('T')[0];
+}
+
+function queueItemDate(item: QueueItem) {
+  if (item.appointmentTime) return item.appointmentTime.split('T')[0];
+  return toLocalDateInputValue(new Date(item.joinedAt));
+}
 
 function TimeElapsed({ startedAt }: { startedAt: string }) {
   const [mins, setMins] = useState(0);
@@ -20,7 +163,20 @@ function TimeElapsed({ startedAt }: { startedAt: string }) {
     return () => clearInterval(interval);
   }, [startedAt]);
 
-  return <span style={{ display: 'block', fontSize: '0.75rem', color: '#10b981', marginTop: '4px', fontWeight: 600 }}>Atendimento iniciado há {mins} min</span>;
+  return <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--success)', marginTop: '4px', fontWeight: 600 }}>Atendimento iniciado há {mins} min</span>;
+}
+
+function AdminNavIcon({ tab }: { tab: AdminTab }) {
+  const common = { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true };
+
+  if (tab === 'atendimento') return <svg {...common}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6m-3-3h6"/></svg>;
+  if (tab === 'agenda') return <svg {...common}><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg>;
+  if (tab === 'financial') return <svg {...common}><path d="M4 19V9m5 10V5m5 14v-7m5 7V3"/></svg>;
+  if (tab === 'services') return <svg {...common}><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>;
+  if (tab === 'store') return <svg {...common}><path d="M6 2 3 6v15h18V6l-3-4Z"/><path d="M3 6h18M16 10a4 4 0 0 1-8 0"/></svg>;
+  if (tab === 'tasks') return <svg {...common}><path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>;
+  if (tab === 'scheduling') return <svg {...common}><path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6M9 8h6m2 8h6"/></svg>;
+  return <svg {...common}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1h.1a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>;
 }
 
 export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant }) {
@@ -30,48 +186,57 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const prevQueueRef = useRef<QueueItem[]>([]);
 
   // INITIAL LOAD + REALTIME
-  const mapQueueItem = (q: any): QueueItem => {
-    // Fallback logic: if duration is missing in the record, try to find it in current services
-    let duration = q.duration;
-    if (!duration && tenant?.services) {
-      const svc = tenant.services.find(s => s.id === q.service_id);
-      if (svc) duration = svc.duration;
-    }
-
+  const mapQueueItem = useCallback((q: QueueRow): QueueItem => {
     return {
       id: q.id,
       name: q.name,
       whatsapp: q.whatsapp,
       serviceId: q.service_id,
       serviceName: q.service_name,
-      price: parseFloat(q.price),
+      price: Number(q.price),
       status: q.status,
       joinedAt: q.joined_at,
       appointmentTime: q.appointment_time,
       isOnWay: q.is_on_way,
       pushId: q.push_id,
       startedAt: q.started_at,
-      duration: duration || 30
+      duration: q.duration || 30
     };
-  };
+  }, []);
 
-  const fetchData = async () => {
-    const { data: queueData } = await supabase
-      .from('queue_items')
-      .select('*')
-      .eq('tenant_id', tenant.id)
-      .order('joined_at', { ascending: true });
+  const fetchData = useCallback(async () => {
+    const dayStart = new Date();
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+
+    const [queueResponse, tenantResponse, completedResponse, settingsResponse] = await Promise.all([
+      supabase
+        .from('queue_items')
+        .select('*')
+        .eq('tenant_id', tenant.id)
+        .order('joined_at', { ascending: true }),
+      supabase
+        .from('tenants')
+        .select('*')
+        .eq('id', tenant.id)
+        .single(),
+      supabase
+        .from('financial_records')
+        .select('id', { count: 'exact', head: true })
+        .eq('tenant_id', tenant.id)
+        .gte('completed_at', dayStart.toISOString())
+        .lt('completed_at', dayEnd.toISOString()),
+      supabase.from('platform_settings').select('pix_key, pix_name').limit(1).single(),
+    ]);
+
+    const queueData = queueResponse.data;
 
     if (queueData) setQueue(queueData.map(mapQueueItem));
 
-    const { data: tenantData } = await supabase
-      .from('tenants')
-      .select('*')
-      .eq('id', tenant.id)
-      .single();
+    const tenantData = tenantResponse.data;
 
     if (tenantData) {
-      setCompletedCount(tenantData.completed_today || 0);
       setTenant(prev => ({
         ...prev,
         profession: tenantData.profession,
@@ -92,12 +257,14 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       }));
     }
 
-    const { data: settingsData } = await supabase.from('platform_settings').select('pix_key, pix_name').limit(1).single();
+    setCompletedCount(completedResponse.count || 0);
+
+    const settingsData = settingsResponse.data;
     if (settingsData) {
       if (settingsData.pix_key) setAdminPixKey(settingsData.pix_key);
       if (settingsData.pix_name) setAdminPixName(settingsData.pix_name);
     }
-  };
+  }, [tenant.id, mapQueueItem]);
 
   // INITIAL LOAD + REALTIME
   useEffect(() => {
@@ -109,28 +276,36 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'queue_items', filter: `tenant_id=eq.${tenant.id}` },
         (payload) => {
-          console.log('[RT] INSERT', payload.new);
-          setQueue(prev => prev.some(i => i.id === payload.new.id) ? prev : [...prev, mapQueueItem(payload.new)]);
+          const newItem = mapQueueItem(payload.new as QueueRow);
+          setQueue(prev => prev.some(i => i.id === payload.new.id) ? prev : [...prev, newItem]);
+
+          if (document.querySelector('.professional-admin')) {
+            const isAppointment = Boolean(newItem.appointmentTime);
+            window.dispatchEvent(new CustomEvent('suavez:notification', {
+              detail: {
+                title: isAppointment ? 'Novo agendamento' : 'Novo cliente na fila',
+                message: `${newItem.name} solicitou ${newItem.serviceName}.`,
+                url: window.location.href,
+              },
+            }));
+          }
         }
       )
       .on('postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'queue_items', filter: `tenant_id=eq.${tenant.id}` },
         (payload) => {
-          console.log('[RT] UPDATE queue', payload.new);
           setQueue(prev => prev.map(item =>
-            item.id === payload.new.id ? { ...item, ...mapQueueItem({ ...item, ...payload.new }) } : item
+            item.id === payload.new.id ? mapQueueItem(payload.new as QueueRow) : item
           ));
         }
       )
       .on('postgres_changes',
         { event: 'DELETE', schema: 'public', table: 'queue_items' },
         (payload) => {
-          console.log('[RT] DELETE', payload.old);
           setQueue(prev => prev.filter(item => item.id !== payload.old.id));
         }
       )
       .subscribe((status) => {
-        console.log('[RT] queueChannel:', status);
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') fetchData();
       });
 
@@ -140,8 +315,6 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       .on('postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'tenants', filter: `id=eq.${tenant.id}` },
         (payload) => {
-          console.log('[RT] UPDATE tenant', payload.new);
-          if (payload.new.completed_today !== undefined) setCompletedCount(payload.new.completed_today);
           setTenant(prev => ({
             ...prev,
             isOnline: payload.new.is_online ?? prev.isOnline,
@@ -162,7 +335,6 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         }
       )
       .subscribe((status) => {
-        console.log('[RT] tenantChannel:', status);
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') fetchData();
       });
 
@@ -174,7 +346,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       supabase.removeChannel(tenantChannel);
       clearInterval(pollInterval);
     };
-  }, [tenant.id]);
+  }, [tenant.id, fetchData, mapQueueItem]);
 
 
   // Handle service extraction since we now deal with objects
@@ -184,21 +356,13 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const [customerWhatsapp, setCustomerWhatsapp] = useState('');
   const [selectedServiceId, setSelectedServiceId] = useState('');
   const [completedCount, setCompletedCount] = useState(0);
+  const [activeQueueActionId, setActiveQueueActionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   
   // Appointment specific state
-  const [selectedDate, setSelectedDate] = useState(() => {
-    const d = new Date();
-    // Ajustar fuso horário local para o input de data
-    const offset = d.getTimezoneOffset() * 60000;
-    return new Date(d.getTime() - offset).toISOString().split('T')[0];
-  });
+  const [selectedDate, setSelectedDate] = useState(() => toLocalDateInputValue(new Date()));
   const [selectedTimeSlot, setSelectedTimeSlot] = useState('');
-  const [adminSelectedDate, setAdminSelectedDate] = useState(() => {
-    const d = new Date();
-    const offset = d.getTimezoneOffset() * 60000;
-    return new Date(d.getTime() - offset).toISOString().split('T')[0];
-  });
+  const [adminSelectedDate, setAdminSelectedDate] = useState(() => toLocalDateInputValue(new Date()));
 
   // O serviço não é mais selecionado automaticamente para evitar mal entendidos
 
@@ -207,7 +371,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showLogin, setShowLogin] = useState(false);
-  const [activeTab, setActiveTab] = useState<'atendimento' | 'agenda' | 'financial' | 'tasks' | 'store' | 'services' | 'scheduling' | 'settings'>('atendimento');
+  const [activeTab, setActiveTab] = useState<AdminTab>('atendimento');
   const [tasks, setTasks] = useState<TenantTask[]>([]);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [products, setProducts] = useState<TenantProduct[]>([]);
@@ -218,6 +382,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const [newProductImageFile, setNewProductImageFile] = useState<File | null>(null);
   const [newProductImagePreview, setNewProductImagePreview] = useState<string>('');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isCompactAdmin, setIsCompactAdmin] = useState(() => window.matchMedia('(max-width: 1020px)').matches);
   const [isAdminAddModalOpen, setIsAdminAddModalOpen] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [showLeaveModal, setShowLeaveModal] = useState(false);
@@ -231,8 +396,36 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const [newServiceName, setNewServiceName] = useState('');
   const [newServicePrice, setNewServicePrice] = useState('');
   const [newServiceDuration, setNewServiceDuration] = useState('30');
+  const [profileSaveState, setProfileSaveState] = useState<'saved' | 'saving' | 'error'>('saved');
 
   const [notifsEnabled, setNotifsEnabled] = useState(true);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 1020px)');
+    const handleChange = (event: MediaQueryListEvent) => {
+      setIsCompactAdmin(event.matches);
+      if (!event.matches) setIsMobileMenuOpen(false);
+    };
+    mediaQuery.addEventListener('change', handleChange);
+    return () => mediaQuery.removeEventListener('change', handleChange);
+  }, []);
+
+  useEffect(() => {
+    if (!isAdminAddModalOpen && !showServiceModal && !showAdminDeleteModal) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (showAdminDeleteModal) {
+        setShowAdminDeleteModal(false);
+        setItemToDelete(null);
+      } else if (showServiceModal) {
+        setShowServiceModal(false);
+      } else {
+        setIsAdminAddModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isAdminAddModalOpen, showServiceModal, showAdminDeleteModal]);
 
   useEffect(() => {
     const checkNotifs = async () => {
@@ -240,9 +433,12 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       setNotifsEnabled(enabled);
     };
     checkNotifs();
-    // Checar a cada 2 segundos caso o usuário mude nas configurações do browser
-    const interval = setInterval(checkNotifs, 2000);
-    return () => clearInterval(interval);
+    const handlePushState = (event: Event) => {
+      const detail = (event as CustomEvent<{ enabled?: boolean }>).detail;
+      setNotifsEnabled(Boolean(detail?.enabled));
+    };
+    window.addEventListener('suavez:push-state', handlePushState);
+    return () => window.removeEventListener('suavez:push-state', handlePushState);
   }, []);
 
   // Load stats from localStorage on mount (for persistent auth)
@@ -254,14 +450,14 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     }
   }, [tenant.slug]);
 
-  const fetchTasks = async () => {
+  const fetchTasks = useCallback(async () => {
     const { data } = await supabase
       .from('tenant_tasks')
       .select('*')
       .eq('tenant_id', tenant.id)
       .order('created_at', { ascending: false });
     if (data) {
-      setTasks(data.map((t: any) => ({
+      setTasks((data as TaskRow[]).map(t => ({
         id: t.id,
         tenantId: t.tenant_id,
         title: t.title,
@@ -269,53 +465,52 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         createdAt: t.created_at
       })));
     }
-  };
+  }, [tenant.id]);
 
-  const fetchProducts = async () => {
+  const fetchProducts = useCallback(async () => {
     const { data } = await supabase
       .from('tenant_products')
       .select('*')
       .eq('tenant_id', tenant.id)
       .order('created_at', { ascending: false });
     if (data) {
-      setProducts(data.map((p: any) => ({
+      setProducts((data as ProductRow[]).map(p => ({
         id: p.id,
         tenantId: p.tenant_id,
         name: p.name,
-        price: parseFloat(p.price),
+        price: Number(p.price),
         imageUrl: p.image_url,
         createdAt: p.created_at
       })));
     }
-  };
+  }, [tenant.id]);
 
   useEffect(() => {
     if (isAuthenticated) {
       fetchTasks();
       fetchProducts();
 
-      // CAPTURAR E SALVAR O PUSH ID DO ADMIN (Sempre que logado em PROD)
-      if (import.meta.env.PROD) {
-        const syncAdminPushId = async () => {
-          const pushId = await getOneSignalId();
-          if (pushId) {
-            console.log('[DEBUG] Sincronizando Admin Push ID:', pushId);
-            const { error } = await supabase.from('tenants').update({ admin_push_id: pushId }).eq('id', tenant.id);
-            if (error) console.error('[DEBUG] Erro ao salvar Admin Push ID:', error);
-          }
-        };
-        // Tenta capturar após 5s, 15s e 30s (garante captura mesmo em conexões lentas)
-        setTimeout(syncAdminPushId, 5000);
-        setTimeout(syncAdminPushId, 15000);
-        setTimeout(syncAdminPushId, 30000);
-      }
+      const syncAdminSubscription = async (providedId?: string | null) => {
+        const pushId = providedId === undefined ? await getOneSignalId() : providedId;
+        if (!pushId) return;
+        const { error } = await supabase.from('tenants').update({ admin_push_id: pushId }).eq('id', tenant.id);
+        if (error) console.error('Não foi possível registrar este dispositivo para notificações.', error);
+      };
+
+      void syncAdminSubscription();
+      const handlePushState = (event: Event) => {
+        const detail = (event as CustomEvent<{ enabled?: boolean; id?: string | null }>).detail;
+        if (detail?.enabled && detail.id) void syncAdminSubscription(detail.id);
+      };
+      window.addEventListener('suavez:push-state', handlePushState);
+      return () => window.removeEventListener('suavez:push-state', handlePushState);
     }
-  }, [isAuthenticated, tenant.id]);
+  }, [isAuthenticated, tenant.id, fetchProducts, fetchTasks]);
 
   // Always load products for client-side store button
   useEffect(() => {
     fetchProducts();
-  }, [tenant.id]);
+  }, [fetchProducts]);
 
   const updateBookingType = async (type: 'queue' | 'appointment') => {
     setLoading(true);
@@ -328,12 +523,18 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       showToast('Erro ao atualizar modelo: ' + error.message, 'error');
     } else {
       setTenant(prev => ({ ...prev, bookingType: type }));
+      if (type === 'queue') {
+        const now = toLocalDateInputValue(new Date());
+        setSelectedDate(now);
+        setAdminSelectedDate(now);
+        setActiveTab('atendimento');
+      }
       showToast('Modelo de atendimento atualizado!', 'success');
     }
     setLoading(false);
   };
 
-  const updateSchedulingSettings = async (field: string, value: any) => {
+  const updateSchedulingSettings = async (field: string, value: string | number) => {
     setLoading(true);
     const { error } = await supabase
       .from('tenants')
@@ -349,7 +550,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     setLoading(false);
   };
 
-  const updateWorkingHours = async (newHours: any[]) => {
+  const updateWorkingHours = async (newHours: WorkingHours) => {
     setLoading(true);
     const { error } = await supabase
       .from('tenants')
@@ -416,7 +617,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
       // Check if the entire service duration overlaps with any existing appointment
       const overlapsAppointment = queue.some(item => {
-        if (!item.appointmentTime) return false;
+        if (!item.appointmentTime || item.status === 'cancelled') return false;
         const itemStart = new Date(item.appointmentTime);
         const itemDuration = Number(item.duration) || 30;
         const itemEnd = new Date(itemStart.getTime() + itemDuration * 60000);
@@ -430,13 +631,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         const itemStartMs = itemStart.getTime();
         const itemEndMs = itemEnd.getTime();
 
-        console.log(`[DEBUG] Verificando Slot ${timeStr} (${selectedDuration}min) contra ${item.name} (${itemDuration}min às ${itemStart.toLocaleTimeString()})`);
-
         const overlaps = slotStartMs < itemEndMs && slotEndMs > itemStartMs;
-        
-        if (overlaps) {
-          console.log(`[DEBUG] Slot ${timeStr} bloqueado por ${item.name} (${item.serviceName}): ${itemStart.toLocaleTimeString()} - ${itemEnd.toLocaleTimeString()}`);
-        }
 
         return overlaps;
       });
@@ -487,7 +682,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       });
     }
     prevQueueRef.current = queue;
-  }, [queue, isAuthenticated]);
+  }, [queue, isAuthenticated, showToast]);
 
   const [myQueueItemIds, setMyQueueItemIds] = useState<string[]>(() => {
     const stored = localStorage.getItem(`suavez_customer_ids_${tenant.id}`);
@@ -515,7 +710,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [queue, myQueueItemIds]);
+  }, [queue, myQueueItemIds, tenant.id]);
 
   // Trigger confirmation modal
   const handleJoinQueue = async (e: React.FormEvent) => {
@@ -536,31 +731,33 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   };
 
   // Filtering Logic
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = toLocalDateInputValue(new Date());
+
+  useEffect(() => {
+    if (tenant.bookingType !== 'queue') return;
+    setSelectedDate(todayStr);
+    setAdminSelectedDate(todayStr);
+    if (activeTab === 'agenda') setActiveTab('atendimento');
+  }, [tenant.bookingType, activeTab, todayStr]);
   
   // Today's Queue (Atendimento)
   const todayQueue = queue.filter(item => {
-    const itemDate = item.appointmentTime ? item.appointmentTime.split('T')[0] : item.joinedAt.split('T')[0];
-    return itemDate === todayStr;
+    if (tenant.bookingType === 'queue') {
+      return !item.appointmentTime
+        && (item.status === 'waiting' || item.status === 'ready' || item.status === 'serving');
+    }
+    return queueItemDate(item) === todayStr;
   }).sort((a, b) => {
     if (a.appointmentTime && b.appointmentTime) return a.appointmentTime.localeCompare(b.appointmentTime);
     return a.joinedAt.localeCompare(b.joinedAt);
   });
 
-  // Future Agenda
-  const futureAgenda = queue.filter(item => {
-    const itemDate = item.appointmentTime ? item.appointmentTime.split('T')[0] : item.joinedAt.split('T')[0];
-    return itemDate > todayStr;
-  }).sort((a, b) => {
-    const dateA = a.appointmentTime || a.joinedAt;
-    const dateB = b.appointmentTime || b.joinedAt;
-    return dateA.localeCompare(dateB);
-  });
-
   // Filter for the specific admin selected date (used in Agenda tab)
   const filteredAgenda = queue.filter(item => {
-    const itemDate = item.appointmentTime ? item.appointmentTime.split('T')[0] : item.joinedAt.split('T')[0];
-    return itemDate === adminSelectedDate;
+    return Boolean(item.appointmentTime)
+      && queueItemDate(item) === adminSelectedDate
+      && item.status !== 'cancelled'
+      && item.status !== 'completed';
   }).sort((a, b) => {
     if (a.appointmentTime && b.appointmentTime) return a.appointmentTime.localeCompare(b.appointmentTime);
     return a.joinedAt.localeCompare(b.joinedAt);
@@ -568,48 +765,57 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
   const servingCount = todayQueue.filter(item => item.status === 'serving').length;
   const waitingCount = todayQueue.filter(item => item.status === 'waiting' || item.status === 'ready').length;
+  const pendingCount = todayQueue.filter(item => item.status === 'pending').length;
+  const activeTodayQueue = todayQueue
+    .filter(item => item.status !== 'cancelled' && item.status !== 'completed')
+    .filter(item => tenant.bookingType === 'appointment' || item.status !== 'pending')
+    .sort((a, b) => Number(a.status !== 'pending') - Number(b.status !== 'pending'));
 
   const handleApproveAppointment = async (itemId: string) => {
     const item = queue.find(i => i.id === itemId);
-    if (!item) return;
+    if (!item || activeQueueActionId) return;
 
-    const { error } = await supabase
-      .from('queue_items')
-      .update({ status: 'waiting' })
-      .eq('id', itemId);
+    setActiveQueueActionId(itemId);
+    try {
+      const { error } = await supabase
+        .from('queue_items')
+        .update({ status: 'waiting' })
+        .eq('id', itemId);
 
-    if (!error) {
+      if (error) {
+        showToast('Não foi possível confirmar o agendamento: ' + error.message, 'error');
+        return;
+      }
       showToast(`Agendamento de ${item.name} confirmado! ✅`, 'success');
       if (item.pushId) {
-        sendPushNotification(
-          item.pushId,
-          'Agendamento Confirmado! ✅',
-          `Olá ${item.name}, seu agendamento para ${item.serviceName} foi confirmado pelo profissional.`,
-          window.location.origin + '/' + tenant.slug
-        );
+        void sendPushNotification('appointment_approved', tenant.id, item.id);
       }
+    } finally {
+      setActiveQueueActionId(null);
     }
   };
 
   const handleRejectAppointment = async (item: QueueItem) => {
     const confirm = window.confirm(`Deseja realmente recusar o agendamento de ${item.name}?`);
-    if (!confirm) return;
+    if (!confirm || activeQueueActionId) return;
 
-    const { error } = await supabase
-      .from('queue_items')
-      .update({ status: 'cancelled' })
-      .eq('id', item.id);
+    setActiveQueueActionId(item.id);
+    try {
+      const { error } = await supabase
+        .from('queue_items')
+        .update({ status: 'cancelled' })
+        .eq('id', item.id);
 
-    if (!error) {
+      if (error) {
+        showToast('Não foi possível recusar o agendamento: ' + error.message, 'error');
+        return;
+      }
       showToast('Agendamento recusado.', 'info');
       if (item.pushId) {
-        sendPushNotification(
-          item.pushId,
-          'Agendamento Recusado ❌',
-          `Olá ${item.name}, infelizmente não poderemos atender seu agendamento de ${item.serviceName}.`,
-          window.location.origin + '/' + tenant.slug
-        );
+        void sendPushNotification('appointment_rejected', tenant.id, item.id);
       }
+    } finally {
+      setActiveQueueActionId(null);
     }
   };
 
@@ -617,17 +823,19 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
   // Group client queue by day
   const groupedClientQueue = queue.reduce((acc, item) => {
-    const date = item.appointmentTime ? item.appointmentTime.split('T')[0] : item.joinedAt.split('T')[0];
+    const date = queueItemDate(item);
     if (!acc[date]) acc[date] = [];
     acc[date].push(item);
     return acc;
   }, {} as Record<string, QueueItem[]>);
+  const publicQueueItems = (tenant.bookingType === 'queue'
+    ? queue.filter(item => !item.appointmentTime && (item.status === 'waiting' || item.status === 'ready' || item.status === 'serving'))
+    : (groupedClientQueue[selectedDate] || []).filter(item => item.status !== 'cancelled'))
+    .sort((a, b) => (a.appointmentTime || a.joinedAt).localeCompare(b.appointmentTime || b.joinedAt));
 
   // Handle actual adding to queue
-  const confirmJoinQueue = async () => {
-    console.log('[DEBUG] Iniciando confirmJoinQueue...');
+  const confirmJoinQueue = async (requestedPushId?: string | null) => {
     setShowConfirmation(false);
-    const startTime = Date.now();
     setLoading(true);
     
     if (myQueueItemIds.length >= 4) {
@@ -639,30 +847,20 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     try {
       const selectedSvc = tenant.services.find(s => s.id === selectedServiceId);
       if (!selectedSvc) {
-        console.error('[DEBUG] Serviço não encontrado:', selectedServiceId);
+        console.error('Serviço selecionado não foi encontrado.');
         setLoading(false);
         return;
       }
 
       // Capture OneSignal ID if possible (non-blocking, PROD ONLY)
-      let pushId = null;
-      if (import.meta.env.PROD) {
+      let pushId = requestedPushId ?? null;
+      if (import.meta.env.PROD && requestedPushId === undefined) {
         try {
-          console.log('[DEBUG] Tentando capturar OneSignal ID...');
           pushId = await getOneSignalId();
-          console.log('[DEBUG] OneSignal ID capturado:', pushId);
         } catch (err) {
-          console.warn('[DEBUG] Falha ao capturar Push ID, continuando sem ele:', err);
+          console.warn('Não foi possível ativar as notificações deste dispositivo.', err);
         }
-      } else {
-        console.log('[DEBUG] OneSignal ignorado em modo DEV.');
       }
-
-      console.log('[DEBUG] Enviando para o Supabase...', {
-        tenant_id: tenant.id,
-        name: name.trim(),
-        whatsapp: customerWhatsapp.trim()
-      });
 
       const { data, error } = await supabase.from('queue_items').insert([{
         tenant_id: tenant.id,
@@ -678,10 +876,9 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       }]).select();
 
       if (error) {
-        console.error('[DEBUG] Erro Supabase:', error);
+        console.error('Erro ao criar atendimento:', error);
         showToast('Erro ao entrar na fila: ' + error.message, 'error');
       } else if (data && data.length > 0) {
-        console.log('[DEBUG] Sucesso! Dados retornados:', data[0]);
         setName('');
         setCustomerWhatsapp('');
         
@@ -696,97 +893,143 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         
         showToast('Presença confirmada com sucesso!', 'success');
 
-        // Notificar o PROFISSIONAL (se ele tiver um admin_push_id salvo)
-        const { data: tenantData } = await supabase.from('tenants').select('admin_push_id').eq('id', tenant.id).single();
-        if (tenantData?.admin_push_id && import.meta.env.PROD) {
-          console.log('[DEBUG] Disparando notificação para o Admin...');
-          sendPushNotification(
-            tenantData.admin_push_id,
-            tenant.bookingType === 'appointment' ? 'Novo Agendamento Solicitado! 📅' : 'Novo Cliente na Fila! 👤',
-            `${name.trim()} solicitou ${selectedSvc.name}${tenant.bookingType === 'appointment' ? ` para o dia ${new Date(selectedDate + 'T12:00:00').toLocaleDateString('pt-BR')} às ${selectedTimeSlot}` : ''}.`,
-            window.location.origin + '/' + tenant.slug
-          );
-        }
+        // O servidor deriva texto e destinatário a partir deste registro.
+        sendPushNotification('client_joined', tenant.id, data[0].id);
       }
-    } catch (err: any) {
-      console.error('[DEBUG] Erro inesperado no fluxo:', err);
-      showToast('Ocorreu um erro inesperado: ' + err.message, 'error');
+    } catch (err: unknown) {
+      console.error('Erro inesperado ao criar atendimento:', err);
+      const message = err instanceof Error ? err.message : 'Tente novamente em instantes.';
+      showToast('Ocorreu um erro inesperado: ' + message, 'error');
     } finally {
-      const elapsedTime = Date.now() - startTime;
-      if (elapsedTime < 1200) {
-        await new Promise(resolve => setTimeout(resolve, 1200 - elapsedTime));
-      }
       setLoading(false);
-      console.log('[DEBUG] Fim do processo confirmJoinQueue');
+    }
+  };
+
+  const confirmAdminAddClient = async () => {
+    const selectedSvc = tenant.services.find(service => service.id === selectedServiceId);
+    if (!name.trim() || !customerWhatsapp.trim() || !selectedSvc) {
+      showToast('Preencha os dados do cliente e selecione um serviço.', 'warning');
+      return false;
+    }
+    if (tenant.bookingType === 'appointment' && !selectedTimeSlot) {
+      showToast('Selecione um horário disponível.', 'warning');
+      return false;
+    }
+
+    setLoading(true);
+    try {
+      const { error } = await supabase.from('queue_items').insert([{
+        tenant_id: tenant.id,
+        name: name.trim(),
+        whatsapp: customerWhatsapp.trim(),
+        service_id: selectedSvc.id,
+        service_name: selectedSvc.name,
+        price: selectedSvc.price,
+        // Um compromisso criado pelo próprio estabelecimento já nasce confirmado.
+        status: 'waiting',
+        appointment_time: tenant.bookingType === 'appointment' ? getISOWithOffset(selectedDate, selectedTimeSlot) : null,
+        push_id: null,
+        duration: selectedSvc.duration || 30,
+      }]);
+
+      if (error) {
+        showToast('Não foi possível adicionar o cliente: ' + error.message, 'error');
+        return false;
+      }
+
+      setName('');
+      setCustomerWhatsapp('');
+      setSelectedServiceId('');
+      setSelectedTimeSlot('');
+      await fetchData();
+      showToast(tenant.bookingType === 'appointment' ? 'Agendamento confirmado e adicionado.' : 'Cliente adicionado à fila.', 'success');
+      return true;
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleCompleteService = async (id: string) => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || activeQueueActionId) return;
     
-    // Find the price of the item being completed before deleting it
     const item = queue.find(q => q.id === id);
-
-    // 1. Remove item from queue
-    const { error: delError } = await supabase.from('queue_items').delete().eq('id', id);
-    if (delError) return;
-
-    // 2. Record revenue (only price + date, nothing else)
-    if (item) {
-      await supabase.from('financial_records').insert([{
-        tenant_id: tenant.id,
-        price: item.price
-      }]);
+    if (!item) {
+      showToast('Este atendimento não está mais disponível.', 'warning');
+      return;
     }
 
-    // 3. Increment tenant total cuts
-    const newCount = completedCount + 1;
-    await supabase.from('tenants').update({ completed_today: newCount }).eq('id', tenant.id);
-    // Next person stays as 'waiting' - barber manually clicks Iniciar
+    setActiveQueueActionId(id);
+    try {
+      // Registra a receita primeiro; se a remoção falhar, desfaz o registro criado.
+      const { data: financialRecord, error: financialError } = await supabase.from('financial_records').insert([{
+        tenant_id: tenant.id,
+        price: item.price,
+      }]).select('id').single();
+
+      if (financialError || !financialRecord) {
+        showToast('Não foi possível registrar a receita. O atendimento continua aberto.', 'error');
+        return;
+      }
+
+      const { error: deleteError } = await supabase.from('queue_items').delete().eq('id', id);
+      if (deleteError) {
+        await supabase.from('financial_records').delete().eq('id', financialRecord.id);
+        showToast('Não foi possível concluir o atendimento. Tente novamente.', 'error');
+        return;
+      }
+
+      setQueue(current => current.filter(queueItem => queueItem.id !== id));
+      setCompletedCount(current => current + 1);
+      showToast('Atendimento concluído e receita registrada.', 'success');
+    } finally {
+      setActiveQueueActionId(null);
+    }
   };
 
   const handleCallClient = async (id: string) => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || activeQueueActionId) return;
     
     const client = queue.find(q => q.id === id);
-    
-    const { error } = await supabase.from('queue_items').update({ 
-      status: 'ready' 
-    }).eq('id', id);
-    
-    if (!error && client?.pushId && import.meta.env.PROD) {
-      sendPushNotification(
-        client.pushId,
-        'Sua vez está chegando! ✂️',
-        `Olá ${client.name}, por favor, aproxime-se. O profissional já vai te atender em instantes!`,
-        window.location.origin + '/' + tenant.slug
-      );
+    if (!client || client.status === 'ready') return;
+
+    setActiveQueueActionId(id);
+    try {
+      const { error } = await supabase.from('queue_items').update({ status: 'ready' }).eq('id', id);
+      if (error) {
+        showToast('Não foi possível chamar o cliente: ' + error.message, 'error');
+        return;
+      }
       showToast(`Cliente ${client.name} chamado!`, 'success');
-    } else if (!import.meta.env.PROD) {
-      console.log('[DEBUG] Notificação de Chamada suprimida (Modo DEV)');
-      showToast(`Cliente chamado! (Modo DEV)`, 'success');
+      if (client.pushId) void sendPushNotification('client_called', tenant.id, client.id);
+    } finally {
+      setActiveQueueActionId(null);
     }
   };
 
   const handleStartService = async (id: string) => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || activeQueueActionId) return;
     
     // Find client to get push_id
     const client = queue.find(q => q.id === id);
     
-    const { error } = await supabase.from('queue_items').update({ 
-      status: 'serving', 
-      started_at: new Date().toISOString(),
-      is_on_way: false
-    }).eq('id', id);
-    
-    if (!error && client?.pushId && import.meta.env.PROD) {
-      sendPushNotification(
-        client.pushId,
-        'Atendimento Iniciado! ✂️',
-        `Olá ${client.name}, seu atendimento começou. Aproveite a experiência!`,
-        window.location.origin + '/' + tenant.slug
-      );
+    if (!client) return;
+
+    setActiveQueueActionId(id);
+    try {
+      const { error } = await supabase.from('queue_items').update({
+        status: 'serving',
+        started_at: new Date().toISOString(),
+        is_on_way: false
+      }).eq('id', id);
+
+      if (error) {
+        showToast('Não foi possível iniciar o atendimento: ' + error.message, 'error');
+        return;
+      }
+      showToast(`Atendimento de ${client.name} iniciado.`, 'success');
+      if (client.pushId) void sendPushNotification('service_started', tenant.id, client.id);
+    } finally {
+      setActiveQueueActionId(null);
     }
   };
 
@@ -821,17 +1064,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     } else {
       showToast('Presença confirmada! O profissional foi avisado.', 'success');
       
-      // Notificar o PROFISSIONAL (A Caminho)
-      const { data: tenantData } = await supabase.from('tenants').select('admin_push_id').eq('id', tenant.id).single();
-      if (tenantData?.admin_push_id && import.meta.env.PROD) {
-        const client = queue.find(q => q.id === id);
-        sendPushNotification(
-          tenantData.admin_push_id,
-          'Cliente a caminho! 🚗',
-          `${client?.name || 'Um cliente'} confirmou que está saindo de casa.`,
-          window.location.origin + '/' + tenant.slug
-        );
-      }
+      sendPushNotification('client_on_way', tenant.id, id);
     }
   };
 
@@ -872,9 +1105,11 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       // Persistir login para não deslogar ao atualizar
       localStorage.setItem(`suavez_auth_${tenant.slug}`, 'true');
       
-      // Logar no OneSignal para receber notificações de admin
-      loginOneSignal(`admin_${tenant.id}`);
-      requestNotificationPermission();
+      void requestNotificationPermission().then(async pushId => {
+        if (!pushId) return;
+        const { error } = await supabase.from('tenants').update({ admin_push_id: pushId }).eq('id', tenant.id);
+        if (error) showToast('Login realizado, mas as notificações não puderam ser ativadas.', 'warning');
+      });
     } else {
       showToast('E-mail ou senha incorretos!', 'error');
     }
@@ -893,11 +1128,13 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       }])
       .select();
 
-    if (!error && data) {
-      setNewTaskTitle('');
-      fetchTasks();
-      showToast('Atividade adicionada!', 'success');
+    if (error || !data) {
+      showToast('Não foi possível adicionar a tarefa: ' + (error?.message || 'tente novamente'), 'error');
+      return;
     }
+    setNewTaskTitle('');
+    await fetchTasks();
+    showToast('Atividade adicionada!', 'success');
   };
 
   const handleToggleTask = async (id: string, currentStatus: boolean) => {
@@ -906,9 +1143,11 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       .update({ is_completed: !currentStatus })
       .eq('id', id);
 
-    if (!error) {
-      fetchTasks();
+    if (error) {
+      showToast('Não foi possível atualizar a tarefa: ' + error.message, 'error');
+      return;
     }
+    await fetchTasks();
   };
 
   const handleDeleteTask = async (id: string) => {
@@ -917,15 +1156,21 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       .delete()
       .eq('id', id);
 
-    if (!error) {
-      fetchTasks();
-      showToast('Atividade removida!', 'info');
+    if (error) {
+      showToast('Não foi possível remover a tarefa: ' + error.message, 'error');
+      return;
     }
+    await fetchTasks();
+    showToast('Atividade removida!', 'info');
   };
 
   const handleLogout = () => {
     setIsAuthenticated(false);
     localStorage.removeItem(`suavez_auth_${tenant.slug}`);
+    void getOneSignalId().then(pushId => {
+      if (!pushId) return;
+      return supabase.from('tenants').update({ admin_push_id: null }).eq('id', tenant.id).eq('admin_push_id', pushId);
+    });
   };
 
   const toggleRole = () => {
@@ -974,9 +1219,14 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     e.preventDefault();
     if (!newServiceName.trim() || !newServicePrice) return;
 
-    const price = parseFloat(newServicePrice.replace(',', '.'));
-    if (isNaN(price)) {
-      showToast('Preço inválido!', 'warning');
+    const price = parseMoneyInput(newServicePrice);
+    const duration = Number(newServiceDuration);
+    if (price === null) {
+      showToast('Informe um preço válido e não negativo.', 'warning');
+      return;
+    }
+    if (!Number.isInteger(duration) || duration < 5 || duration > 600) {
+      showToast('A duração deve ficar entre 5 e 600 minutos.', 'warning');
       return;
     }
 
@@ -985,15 +1235,15 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     if (editingService) {
       // Edit existing
       updatedServices = tenant.services.map(s => 
-        s.id === editingService.id ? { ...s, name: newServiceName, price, duration: parseInt(newServiceDuration) || 30 } : s
+        s.id === editingService.id ? { ...s, name: newServiceName.trim(), price, duration } : s
       );
     } else {
       // Add new
       const newService: Service = {
         id: crypto.randomUUID(),
-        name: newServiceName,
+        name: newServiceName.trim(),
         price,
-        duration: parseInt(newServiceDuration) || 30
+        duration,
       };
       updatedServices = [...tenant.services, newService];
     }
@@ -1049,7 +1299,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     setShowServiceModal(true);
   };
 
-  const updateTenantProfile = async (field: keyof Tenant, value: any) => {
+  const updateTenantProfile = async <K extends keyof Tenant>(field: K, value: Tenant[K]) => {
+    setProfileSaveState('saving');
     const dbField = field === 'primaryColor' ? 'primary_color' : field === 'secondaryColor' ? 'secondary_color' : field === 'logoUrl' ? 'logo_url' : field === 'hasLogo' ? 'has_logo' : field;
     const { error } = await supabase
       .from('tenants')
@@ -1057,15 +1308,70 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       .eq('id', tenant.id);
 
     if (error) {
+      setProfileSaveState('error');
       showToast('Erro ao atualizar perfil: ' + error.message, 'error');
     } else {
       setTenant({ ...tenant, [field]: value });
+      setProfileSaveState('saved');
       showToast('Perfil atualizado com sucesso!', 'success');
     }
   };
 
   // DERIVED CONFIG: Always recalculate based on current state
   const prof = getProfessionConfig(tenant.profession);
+  const selectedService = tenant.services.find(service => service.id === selectedServiceId);
+  const availableTimeSlots = tenant.bookingType === 'appointment' ? generateTimeSlots() : [];
+  const selectedDayAppointments = (groupedClientQueue[selectedDate] || [])
+    .filter(item => item.status !== 'cancelled');
+  const customerAccent = tenant.primaryColor || '#7257d9';
+  const customerSecondary = tenant.secondaryColor || '#ffffff';
+  const customerThemeStyle = {
+    '--accent-primary': customerAccent,
+    '--accent-primary-rgb': hexToRgbString(customerAccent),
+    '--accent-secondary': customerSecondary,
+    '--customer-accent': customerAccent,
+    '--customer-accent-rgb': hexToRgbString(customerAccent),
+    '--customer-on-accent': getReadableAccentText(customerAccent, customerSecondary),
+  } as React.CSSProperties;
+  const adminThemeStyle = {
+    ...customerThemeStyle,
+    '--admin-accent': customerAccent,
+    '--admin-accent-rgb': hexToRgbString(customerAccent),
+    '--admin-on-accent': getReadableAccentText(customerAccent, customerSecondary),
+  } as React.CSSProperties;
+  const activeTabMeta = activeTab === 'atendimento' && tenant.bookingType === 'queue'
+    ? {
+        eyebrow: 'Operação em tempo real',
+        title: 'Fila de agora',
+        description: 'Acompanhe a ordem de chegada e conduza cada cliente até a conclusão.',
+      }
+    : ADMIN_TAB_META[activeTab];
+  const clientQueueDate = tenant.bookingType === 'queue' ? todayStr : selectedDate;
+  const adminNavGroups: Array<{ label: string; items: Array<{ id: AdminTab; label: string; description: string }> }> = [
+    {
+      label: 'Operação',
+      items: [
+        { id: 'atendimento', label: tenant.bookingType === 'queue' ? 'Fila de agora' : 'Atendimento de hoje', description: tenant.bookingType === 'queue' ? 'Movimento em tempo real' : 'Compromissos do dia' },
+        ...(tenant.bookingType === 'appointment' ? [{ id: 'agenda' as AdminTab, label: 'Agenda', description: 'Reservas por data' }] : []),
+      ],
+    },
+    {
+      label: 'Negócio',
+      items: [
+        { id: 'financial', label: 'Financeiro', description: 'Receitas e despesas' },
+        { id: 'services', label: 'Serviços', description: 'Preços e duração' },
+        { id: 'store', label: 'Produtos', description: 'Catálogo recomendado' },
+        { id: 'tasks', label: 'Tarefas', description: 'Pendências da rotina' },
+      ],
+    },
+    {
+      label: 'Estabelecimento',
+      items: [
+        { id: 'scheduling', label: 'Atendimento e horários', description: 'Modelo e expediente' },
+        { id: 'settings', label: 'Perfil e aparência', description: 'Contato e identidade' },
+      ],
+    },
+  ];
 
   // Format time (e.g., 14:30)
   const formatTimeISO = (isoString: string) => {
@@ -1089,10 +1395,22 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     return `${dateStr}T${timeStr}:00${sign}${hours}:${mins}`;
   };
 
-  // Helper to hex to rgb
-  const hexToRgb = (hex: string) => {
-    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-    return result ? `${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}` : '212, 175, 55';
+  const changeAdminDateBy = (days: number) => {
+    const date = new Date(`${adminSelectedDate}T12:00:00`);
+    date.setDate(date.getDate() + days);
+    const nextDate = toLocalDateInputValue(date);
+    setAdminSelectedDate(nextDate);
+    setSelectedDate(nextDate);
+  };
+
+  const openAdminAddModal = () => {
+    setName('');
+    setCustomerWhatsapp('');
+    setSelectedServiceId('');
+    setSelectedTimeSlot('');
+    const requestedDate = activeTab === 'agenda' && adminSelectedDate >= todayStr ? adminSelectedDate : todayStr;
+    setSelectedDate(requestedDate);
+    setIsAdminAddModalOpen(true);
   };
 
   // Dynamic CSS variables for tenant theme dynamically applied to document root 
@@ -1100,7 +1418,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     const color = tenant.primaryColor || '#d4af37';
     const sColor = tenant.secondaryColor || '#ffffff';
     document.documentElement.style.setProperty('--accent-primary', color);
-    document.documentElement.style.setProperty('--accent-primary-rgb', hexToRgb(color));
+    document.documentElement.style.setProperty('--accent-primary-rgb', hexToRgbString(color));
     document.documentElement.style.setProperty('--accent-secondary', sColor);
     
     // Cleanup if leaving tenant view
@@ -1124,11 +1442,11 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
             <div className="login-card glass-panel">
               <div className="login-header">
-                <div className="login-logo">
+                <div className={`login-logo ${tenant.hasLogo && tenant.logoUrl ? 'has-custom-logo' : 'has-profession-icon'}`}>
                   {tenant.hasLogo && tenant.logoUrl ? (
                     <img src={tenant.logoUrl} alt="Logo" />
                   ) : (
-                    <div dangerouslySetInnerHTML={{ __html: (prof?.iconSvg || '').replace('width="28" height="28"', 'width="36" height="36"') }} />
+                    <ProfessionIcon profession={tenant.profession} className="profession-icon profession-icon--login" />
                   )}
                 </div>
                 <h2>Acesso Profissional</h2>
@@ -1180,20 +1498,25 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
       {isAuthenticated ? (
         /* PROFESSIONAL ADMIN LAYOUT */
-        <div className="admin-layout-wrapper fade-in" style={{ backgroundColor: '#f8fafc', minHeight: '100vh', position: 'relative' }}>
+        <div className="admin-layout-wrapper professional-admin fade-in" style={adminThemeStyle}>
           {/* MOBILE BACKDROP */}
           {isMobileMenuOpen && (
-            <div className="sidebar-mobile-backdrop" onClick={() => setIsMobileMenuOpen(false)}></div>
+            <button className="sidebar-mobile-backdrop" onClick={() => setIsMobileMenuOpen(false)} aria-label="Fechar menu"></button>
           )}
           
           {/* SIDEBAR */}
-          <aside className={`admin-sidebar ${isMobileMenuOpen ? 'open' : ''}`}>
+          <aside
+            id="professional-admin-menu"
+            className={`admin-sidebar ${isMobileMenuOpen ? 'open' : ''}`}
+            aria-hidden={isCompactAdmin && !isMobileMenuOpen ? true : undefined}
+            inert={isCompactAdmin && !isMobileMenuOpen ? true : undefined}
+          >
             <div className="sidebar-header">
-              <div className="sidebar-logo">
+              <div className={`sidebar-logo ${tenant.hasLogo && tenant.logoUrl ? 'has-custom-logo' : 'has-profession-icon'}`}>
                 {tenant.hasLogo && tenant.logoUrl ? (
                   <img src={tenant.logoUrl} alt="Logo" className="sidebar-logo-img" />
                 ) : (
-                  <div dangerouslySetInnerHTML={{ __html: (prof?.iconSvg || '').replace('width="28" height="28"', 'width="24" height="24"') }} />
+                  <ProfessionIcon profession={tenant.profession} className="profession-icon profession-icon--sidebar" />
                 )}
               </div>
               <div className="sidebar-brand">
@@ -1202,87 +1525,44 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
               </div>
             </div>
 
-            <nav className="sidebar-nav">
-              <button 
-                className={`nav-item ${activeTab === 'atendimento' ? 'active' : ''}`}
-                style={{ cursor: 'pointer' }}
-                onClick={() => { setActiveTab('atendimento'); setIsMobileMenuOpen(false); }}
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-                Atendimento (Hoje)
-              </button>
-              <button 
-                className={`nav-item ${activeTab === 'agenda' ? 'active' : ''}`}
-                style={{ cursor: 'pointer' }}
-                onClick={() => { setActiveTab('agenda'); setIsMobileMenuOpen(false); }}
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
-                Agenda (Futuro)
-              </button>
-              <button 
-                className={`nav-item ${activeTab === 'financial' ? 'active' : ''}`}
-                style={{ cursor: 'pointer' }}
-                onClick={() => { setActiveTab('financial'); setIsMobileMenuOpen(false); }}
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
-                Financeiro
-              </button>
-              <button 
-                className={`nav-item ${activeTab === 'tasks' ? 'active' : ''}`}
-                style={{ cursor: 'pointer' }}
-                onClick={() => { setActiveTab('tasks'); setIsMobileMenuOpen(false); }}
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
-                Controle de Atividades
-              </button>
-              <button 
-                className={`nav-item ${activeTab === 'store' ? 'active' : ''}`}
-                style={{ cursor: 'pointer' }}
-                onClick={() => { setActiveTab('store'); setIsMobileMenuOpen(false); }}
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path><line x1="3" y1="6" x2="21" y2="6"></line><path d="M16 10a4 4 0 0 1-8 0"></path></svg>
-                Loja
-              </button>
-              <button 
-                className={`nav-item ${activeTab === 'services' ? 'active' : ''}`}
-                style={{ cursor: 'pointer' }}
-                onClick={() => { setActiveTab('services'); setIsMobileMenuOpen(false); }}
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
-                Serviços
-              </button>
-              <button 
-                className={`nav-item ${activeTab === 'scheduling' ? 'active' : ''}`}
-                style={{ cursor: 'pointer' }}
-                onClick={() => { setActiveTab('scheduling'); setIsMobileMenuOpen(false); }}
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>
-                Gestão de atendimento
-              </button>
-              <button 
-                className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
-                style={{ cursor: 'pointer' }}
-                onClick={() => { setActiveTab('settings'); setIsMobileMenuOpen(false); }}
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-                Configurações
-              </button>
+            <nav className="sidebar-nav" aria-label="Navegação do painel profissional">
+              {adminNavGroups.map(group => (
+                <div className="admin-nav-group" key={group.label}>
+                  <span className="admin-nav-label">{group.label}</span>
+                  {group.items.map(item => (
+                    <button
+                      key={item.id}
+                      className={`nav-item ${activeTab === item.id ? 'active' : ''}`}
+                      onClick={() => { setActiveTab(item.id); setIsMobileMenuOpen(false); }}
+                      aria-current={activeTab === item.id ? 'page' : undefined}
+                    >
+                      <AdminNavIcon tab={item.id} />
+                      <span className="admin-nav-copy">
+                        <span className="admin-nav-text">{item.label}</span>
+                        <span className="admin-nav-description">{item.description}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ))}
             </nav>
 
             <div className="sidebar-footer">
-              <div className="tenant-status-card">
-                <div className="status-indicator">
-                  <div className={`status-dot ${tenant.isOnline ? 'online' : 'offline'}`}></div>
-                  <span>Status: {tenant.isOnline ? 'Online' : 'Offline'}</span>
+              {tenant.bookingType === 'queue' && (
+                <div className="tenant-status-card">
+                  <div className="status-indicator">
+                    <div className={`status-dot ${tenant.isOnline ? 'online' : 'offline'}`}></div>
+                    <span>Fila {tenant.isOnline ? 'aberta' : 'fechada'}</span>
+                  </div>
+                  <button
+                    onClick={toggleStatus}
+                    className="btn-toggle-status"
+                    style={{ background: tenant.isOnline ? '#ef4444' : '#10b981', color: '#fff' }}
+                  >
+                    {tenant.isOnline ? 'Fechar fila' : 'Abrir fila'}
+                  </button>
                 </div>
-                <button 
-                  onClick={toggleStatus} 
-                  className="btn-toggle-status"
-                  style={{ background: tenant.isOnline ? '#ef4444' : '#10b981', color: '#fff' }}
-                >
-                  {tenant.isOnline ? 'Fechar Loja' : 'Abrir Loja'}
-                </button>
-              </div>
+              )}
               <button onClick={toggleRole} className="btn-logout">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
                 Sair do Painel
@@ -1347,97 +1627,87 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
               </div>
             )}
 
-            <header className="admin-topbar">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                <button className="mobile-menu-btn" onClick={() => setIsMobileMenuOpen(true)}>
+            <header className="admin-topbar admin-page-header">
+              <div className="admin-page-heading">
+                <button
+                  className="mobile-menu-btn"
+                  onClick={() => setIsMobileMenuOpen(true)}
+                  aria-label="Abrir menu"
+                  aria-expanded={isMobileMenuOpen}
+                  aria-controls="professional-admin-menu"
+                >
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
                 </button>
                 <div className="topbar-info">
-                  <h1>
-                    {activeTab === 'atendimento' ? 'Atendimento de Hoje' : 
-                     activeTab === 'agenda' ? 'Agenda de Compromissos' :
-                     activeTab === 'financial' ? 'Controle Financeiro' :
-                     activeTab === 'tasks' ? 'Controle de Atividades' : 'Minha Loja'}
-                  </h1>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <p style={{ margin: 0 }}>
-                      {activeTab === 'atendimento' 
-                        ? new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })
-                        : new Date(adminSelectedDate + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}
-                    </p>
-                  </div>
+                  <span className="admin-eyebrow">{activeTabMeta.eyebrow}</span>
+                  <h1>{activeTabMeta.title}</h1>
+                  <p>{activeTabMeta.description}</p>
                 </div>
               </div>
-              <div className="topbar-actions" style={{ display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
+              <div className="topbar-actions">
+                  <div className="admin-mode-pill">
+                    <span>{tenant.bookingType === 'queue' ? 'Ordem de chegada' : 'Horário marcado'}</span>
+                    {(activeTab === 'atendimento' || activeTab === 'agenda') && (
+                      <small>{activeTab === 'agenda'
+                        ? new Date(adminSelectedDate + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
+                        : 'Hoje'}</small>
+                    )}
+                  </div>
                   <div className="subscription-badge">
                     <div className={`sub-dot ${tenant.subscriptionStatus === 'active' ? 'active' : 'warning'}`}></div>
                     <span>Plano {tenant.subscriptionStatus === 'active' ? 'Ativo' : 'Pendente'}</span>
                   </div>
                   {(activeTab === 'atendimento' || activeTab === 'agenda') && (
                     <button 
-                      onClick={() => {
-                        if (activeTab === 'atendimento') {
-                          setAdminSelectedDate(todayStr);
-                          setSelectedDate(todayStr);
-                        }
-                        setIsAdminAddModalOpen(true);
-                      }}
-                      style={{ 
-                        padding: '10px 20px', 
-                        display: 'flex', 
-                        alignItems: 'center', 
-                        justifyContent: 'center',
-                        gap: '8px',
-                        background: '#0f172a',
-                        color: '#fff',
-                        borderRadius: '12px',
-                        fontWeight: 700,
-                        fontSize: '0.85rem',
-                        border: 'none',
-                        cursor: 'pointer',
-                        flexShrink: 0,
-                        boxShadow: '0 4px 12px rgba(15, 23, 42, 0.15)'
-                      }}
+                      onClick={openAdminAddModal}
+                      className="admin-header-action"
                     >
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                      Novo Cliente
+                      {tenant.bookingType === 'appointment' ? 'Novo agendamento' : 'Adicionar à fila'}
                     </button>
                   )}
                </div>
             </header>
 
             {isAdminAddModalOpen && (
-               <div className="modal-overlay" style={{ zIndex: 10000, position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <div className="modal-content glass-panel fade-in" style={{ maxWidth: '500px', width: '90%', background: 'var(--bg-surface)', color: 'var(--text-primary)', border: '1px solid color-mix(in srgb, var(--accent-primary) 20%, rgba(0,0,0,0.1))', padding: '2rem', borderRadius: '24px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-                      <h3 style={{ fontSize: '1.25rem', margin: 0 }}>Adicionar Cliente à Fila</h3>
-                      <button onClick={() => setIsAdminAddModalOpen(false)} style={{ background: 'transparent', border: 'none', color: '#a1a1aa' }}>
+               <div className="modal-overlay" style={{ zIndex: 10000 }}>
+                  <div className="modal-content admin-modal fade-in" role="dialog" aria-modal="true" aria-labelledby="admin-add-client-title">
+                    <div className="admin-modal-header">
+                      <div>
+                        <span className="admin-eyebrow">{tenant.bookingType === 'appointment' ? 'Novo compromisso' : 'Atendimento imediato'}</span>
+                        <h3 id="admin-add-client-title">{tenant.bookingType === 'appointment' ? 'Adicionar agendamento' : 'Adicionar cliente à fila'}</h3>
+                      </div>
+                      <button className="admin-icon-button" onClick={() => setIsAdminAddModalOpen(false)} aria-label="Fechar">
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                       </button>
                     </div>
 
                     <form onSubmit={async (e) => {
                       e.preventDefault();
-                      await confirmJoinQueue();
-                      setIsAdminAddModalOpen(false);
+                      const wasCreated = await confirmAdminAddClient();
+                      if (wasCreated) setIsAdminAddModalOpen(false);
                     }}>
                       <div className="form-group" style={{ marginBottom: '1.25rem' }}>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', color: '#a1a1aa' }}>Nome do Cliente</label>
-                        <input type="text" value={name} onChange={(e) => setName(e.target.value)} required style={{ width: '100%', padding: '12px', background: 'rgba(0,0,0,0.05)', border: '1px solid rgba(0,0,0,0.1)', borderRadius: '8px', color: 'var(--text-primary)' }} />
+                        <label htmlFor="admin-client-name" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', color: '#a1a1aa' }}>Nome do Cliente</label>
+                        <input id="admin-client-name" autoFocus className="premium-input" type="text" value={name} onChange={(e) => setName(e.target.value)} required />
                       </div>
                       <div className="form-group" style={{ marginBottom: '1.25rem' }}>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', color: '#a1a1aa' }}>WhatsApp</label>
-                        <input type="tel" value={customerWhatsapp} onChange={handlePhoneChange} required style={{ width: '100%', padding: '12px', background: 'rgba(0,0,0,0.05)', border: '1px solid rgba(0,0,0,0.1)', borderRadius: '8px', color: 'var(--text-primary)' }} />
+                        <label htmlFor="admin-client-whatsapp" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', color: '#a1a1aa' }}>WhatsApp</label>
+                        <input id="admin-client-whatsapp" className="premium-input" type="tel" value={customerWhatsapp} onChange={handlePhoneChange} required />
                       </div>
                       
-                      <div style={{ display: 'grid', gridTemplateColumns: tenant.bookingType === 'appointment' ? '1fr 1fr' : '1fr', gap: '1rem', marginBottom: '1.25rem' }}>
+                      <div className="admin-form-grid" style={{ marginBottom: '1.25rem' }}>
                         <div className="form-group">
-                          <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', color: '#a1a1aa' }}>Serviço</label>
+                          <label htmlFor="admin-client-service" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', color: '#a1a1aa' }}>Serviço</label>
                           <select 
+                            id="admin-client-service"
                             value={selectedServiceId} 
-                            onChange={(e) => setSelectedServiceId(e.target.value)} 
+                            onChange={(e) => {
+                              setSelectedServiceId(e.target.value);
+                              setSelectedTimeSlot('');
+                            }}
                             required
-                            style={{ width: '100%', padding: '12px', background: 'rgba(0,0,0,0.05)', border: '1px solid rgba(0,0,0,0.1)', borderRadius: '8px', color: 'var(--text-primary)' }}
+                            className="premium-input"
                           >
                             <option value="" disabled hidden>Selecione um serviço...</option>
                             {tenant.services.map(s => (
@@ -1448,13 +1718,18 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                         
                         {tenant.bookingType === 'appointment' && (
                           <div className="form-group">
-                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', color: '#a1a1aa' }}>Data</label>
+                            <label htmlFor="admin-client-date" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', color: '#a1a1aa' }}>Data</label>
                             <input 
+                              id="admin-client-date"
                               type="date" 
                               value={selectedDate} 
-                              onChange={(e) => setSelectedDate(e.target.value)} 
+                              onChange={(e) => {
+                                setSelectedDate(e.target.value);
+                                setSelectedTimeSlot('');
+                              }}
+                              min={todayStr}
                               required 
-                              style={{ width: '100%', padding: '12px', background: 'rgba(0,0,0,0.05)', border: '1px solid rgba(0,0,0,0.1)', borderRadius: '8px', color: 'var(--text-primary)' }} 
+                              className="premium-input"
                             />
                           </div>
                         )}
@@ -1462,24 +1737,27 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
                       {tenant.bookingType === 'appointment' && (
                         <div className="form-group" style={{ marginBottom: '2rem' }}>
-                          <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', color: '#a1a1aa' }}>Horário Disponível</label>
+                          <label htmlFor="admin-client-time" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', color: '#a1a1aa' }}>Horário Disponível</label>
                           <select 
+                            id="admin-client-time"
                             value={selectedTimeSlot} 
                             onChange={(e) => setSelectedTimeSlot(e.target.value)} 
                             required
-                            style={{ width: '100%', padding: '12px', background: 'rgba(0,0,0,0.05)', border: '1px solid rgba(0,0,0,0.1)', borderRadius: '8px', color: 'var(--text-primary)' }}
+                            className="premium-input"
                           >
                             <option value="">Selecione um horário...</option>
-                            {/* Simple list of common hours or we could use the generateSlots logic if available */}
-                            {['09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '13:00', '13:30', '14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30'].map(slot => (
+                            {availableTimeSlots.map(slot => (
                               <option key={slot} value={slot}>{slot}</option>
                             ))}
                           </select>
+                          {selectedServiceId && availableTimeSlots.length === 0 && (
+                            <p className="admin-field-hint">Não há horários disponíveis nesta data para a duração deste serviço.</p>
+                          )}
                         </div>
                       )}
 
-                      <button type="submit" className="btn-submit" style={{ width: '100%', padding: '14px', background: 'var(--accent-primary)', color: 'var(--accent-secondary)', fontWeight: 800, borderRadius: '10px' }}>
-                        {tenant.bookingType === 'appointment' ? 'Agendar Cliente' : 'Colocar na Fila'}
+                      <button type="submit" disabled={loading} className="btn-submit" style={{ width: '100%', padding: '14px', background: 'var(--accent-primary)', color: 'var(--customer-on-accent)', fontWeight: 800, borderRadius: '10px' }}>
+                        {loading ? 'Salvando…' : tenant.bookingType === 'appointment' ? 'Confirmar Agendamento' : 'Colocar na Fila'}
                       </button>
                     </form>
                  </div>
@@ -1489,13 +1767,15 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
             <div className="admin-content-scroll">
 
               {activeTab === 'financial' ? (
-                <FinancialView tenantId={tenant.id} />
+                <div className="admin-module fade-in"><FinancialView tenantId={tenant.id} /></div>
 
               ) : activeTab === 'tasks' ? (
-                <div className="fade-in">
-                  <div className="premium-card" style={{ padding: 'clamp(1rem, 5vw, 2rem)' }}>
-                    <h2 style={{ marginBottom: '1.5rem', fontSize: '1.25rem' }}>Minhas Atividades</h2>
-                    <form onSubmit={handleAddTask} style={{ display: 'flex', gap: '10px', marginBottom: '2rem', flexWrap: 'wrap' }}>
+                <div className="admin-module fade-in">
+                  <div className="premium-card admin-module-card">
+                    <div className="admin-module-heading">
+                      <div><span className="admin-eyebrow">Rotina organizada</span><h2 className="admin-module-title">Minhas tarefas</h2><p className="admin-module-copy">{tasks.filter(task => !task.isCompleted).length} pendentes · {tasks.filter(task => task.isCompleted).length} concluídas</p></div>
+                    </div>
+                    <form onSubmit={handleAddTask} className="admin-quick-form">
                       <input 
                         type="text" 
                         value={newTaskTitle} 
@@ -1512,16 +1792,17 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                       </button>
                     </form>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div className="admin-list-stack">
                       {tasks.length === 0 ? (
                         <p style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>Nenhuma atividade pendente.</p>
                       ) : (
                         tasks.map(task => (
-                          <div key={task.id} className="glass-card" style={{ padding: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                          <div key={task.id} className={`glass-card admin-list-row ${task.isCompleted ? 'is-complete' : ''}`}>
                             <input 
                               type="checkbox" 
                               checked={task.isCompleted} 
                               onChange={() => handleToggleTask(task.id, task.isCompleted)}
+                              aria-label={`${task.isCompleted ? 'Reabrir' : 'Concluir'} tarefa: ${task.title}`}
                               style={{ width: '20px', height: '20px', cursor: 'pointer' }}
                             />
                             <span style={{ 
@@ -1536,6 +1817,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                             </span>
                             <button 
                               onClick={() => handleDeleteTask(task.id)} 
+                              aria-label={`Excluir tarefa: ${task.title}`}
                               style={{ background: 'transparent', color: '#ef4444', padding: '5px', borderRadius: '5px', cursor: 'pointer' }}
                             >
                               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
@@ -1548,19 +1830,30 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                 </div>
 
               ) : activeTab === 'store' ? (
-                <div className="fade-in">
-                  <div className="premium-card" style={{ padding: '2rem' }}>
-                    <h2 style={{ marginBottom: '0.5rem', fontSize: '1.25rem' }}>Produtos da Loja</h2>
-                    <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem', fontSize: '0.9rem' }}>Adicione produtos que você usa e recomenda. Seus clientes poderão visualizá-los.</p>
+                <div className="admin-module fade-in">
+                  <div className="premium-card admin-module-card">
+                    <div className="admin-module-heading">
+                      <div><span className="admin-eyebrow">Vitrine do estabelecimento</span><h2 className="admin-module-title">Produtos recomendados</h2><p className="admin-module-copy">Adicione produtos que você usa e recomenda. Seus clientes poderão visualizá-los.</p></div>
+                      <span className="admin-count-chip">{products.length} {products.length === 1 ? 'produto' : 'produtos'}</span>
+                    </div>
                     <form onSubmit={async (e) => {
                       e.preventDefault();
                       if (!newProductName || !newProductPrice) return;
+                      const productPrice = parseMoneyInput(newProductPrice);
+                      if (productPrice === null || productPrice === 0) {
+                        showToast('Informe um preço de produto maior que zero.', 'warning');
+                        return;
+                      }
                       let imageUrl = newProductImage || null;
 
                       // Upload file if selected
                       if (newProductImageFile) {
                         let uploadBlob: Blob = newProductImageFile;
-                        try { uploadBlob = await compressImage(newProductImageFile); } catch {}
+                        try {
+                          uploadBlob = await compressImage(newProductImageFile);
+                        } catch (error) {
+                          console.warn('Não foi possível comprimir a imagem; o arquivo original será usado.', error);
+                        }
                         const filePath = `products/${tenant.id}/${Date.now()}.jpg`;
                         const { data: uploadData, error: uploadError } = await supabase.storage
                           .from('product-images')
@@ -1574,7 +1867,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                         }
                       }
 
-                      const { error } = await supabase.from('tenant_products').insert([{ tenant_id: tenant.id, name: newProductName, price: parseFloat(newProductPrice.replace(',','.')), image_url: imageUrl }]);
+                      const { error } = await supabase.from('tenant_products').insert([{ tenant_id: tenant.id, name: newProductName.trim(), price: productPrice, image_url: imageUrl }]);
                       if (!error) {
                         setNewProductName('');
                         setNewProductPrice('');
@@ -1583,22 +1876,24 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                         setNewProductImagePreview('');
                         fetchProducts();
                         showToast('Produto adicionado!', 'success');
+                      } else {
+                        showToast('Não foi possível adicionar o produto: ' + error.message, 'error');
                       }
-                    }} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '2rem' }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1rem' }}>
+                    }} className="admin-product-form">
+                      <div className="admin-form-grid admin-product-form-grid">
                         <div className="form-group" style={{ margin: 0 }}>
                           <label style={{ fontSize: '0.8rem' }}>Nome do produto</label>
                           <input type="text" value={newProductName} onChange={e => setNewProductName(e.target.value)} placeholder="Ex: Pomada X" required />
                         </div>
                         <div className="form-group" style={{ margin: 0 }}>
                           <label style={{ fontSize: '0.8rem' }}>Preço (R$)</label>
-                          <input type="text" value={newProductPrice} onChange={e => setNewProductPrice(e.target.value)} placeholder="29,90" required />
+                          <input type="text" inputMode="decimal" value={newProductPrice} onChange={e => setNewProductPrice(e.target.value)} placeholder="29,90" required />
                         </div>
                       </div>
 
                       <div className="form-group" style={{ margin: 0 }}>
                         <label style={{ fontSize: '0.8rem' }}>Foto do produto</label>
-                        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                        <div className="admin-product-upload-row">
                           <label style={{ 
                             display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 18px',
                              border: '2px dashed color-mix(in srgb, var(--accent-primary) 30%, #cbd5e1)', borderRadius: '12px', cursor: 'pointer',
@@ -1626,7 +1921,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                           {newProductImagePreview && (
                             <div style={{ position: 'relative' }}>
                               <img src={newProductImagePreview} alt="preview" style={{ width: '60px', height: '60px', objectFit: 'cover', borderRadius: '8px', border: '1px solid #e2e8f0' }} />
-                              <button type="button" onClick={() => { setNewProductImageFile(null); setNewProductImagePreview(''); }} style={{ position: 'absolute', top: '-6px', right: '-6px', background: '#ef4444', color: '#fff', borderRadius: '50%', width: '18px', height: '18px', fontSize: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+                              <button type="button" aria-label="Remover foto selecionada" onClick={() => { setNewProductImageFile(null); setNewProductImagePreview(''); }} style={{ position: 'absolute', top: '-10px', right: '-10px', background: '#ef4444', color: '#fff', borderRadius: '50%', width: '32px', height: '32px', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
                             </div>
                           )}
                         </div>
@@ -1636,11 +1931,11 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                          <button type="submit" className="btn-submit" style={{ width: 'auto', padding: '0 24px' }}>Adicionar Produto</button>
                       </div>
                     </form>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '1rem' }}>
+                    <div className="admin-card-grid">
                       {products.length === 0 ? (
                         <p style={{ color: 'var(--text-secondary)', padding: '2rem', gridColumn: '1/-1', textAlign: 'center' }}>Nenhum produto cadastrado ainda.</p>
                       ) : products.map(p => (
-                        <div key={p.id} className="glass-card" style={{ overflow: 'hidden' }}>
+                        <div key={p.id} className="glass-card admin-product-card">
                           {p.imageUrl ? <img src={p.imageUrl} alt={p.name} style={{ width: '100%', height: '140px', objectFit: 'cover' }} /> : (
                             <div style={{ width: '100%', height: '140px', background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                               <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path><line x1="3" y1="6" x2="21" y2="6"></line><path d="M16 10a4 4 0 0 1-8 0"></path></svg>
@@ -1648,8 +1943,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                           )}
                           <div style={{ padding: '1rem' }}>
                             <div style={{ fontWeight: 700, color: '#0f172a', marginBottom: '4px' }}>{p.name}</div>
-                            <div style={{ fontWeight: 800, color: '#10b981', fontSize: '1.1rem', marginBottom: '0.75rem' }}>R$ {p.price.toFixed(2).replace('.',',')}</div>
-                            <button onClick={async () => { await supabase.from('tenant_products').delete().eq('id', p.id); fetchProducts(); }} style={{ background: 'transparent', color: '#ef4444', fontSize: '0.8rem', cursor: 'pointer' }}>Remover</button>
+                            <div className="admin-card-price">R$ {p.price.toFixed(2).replace('.',',')}</div>
+                            <button onClick={async () => { if (!window.confirm(`Remover ${p.name} do catálogo?`)) return; const { error } = await supabase.from('tenant_products').delete().eq('id', p.id); if (error) { showToast('Não foi possível remover o produto: ' + error.message, 'error'); return; } await fetchProducts(); showToast('Produto removido.', 'info'); }} className="admin-danger-link">Remover</button>
                           </div>
                         </div>
                       ))}
@@ -1658,29 +1953,30 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                 </div>
 
               ) : activeTab === 'services' ? (
-                <div className="fade-in">
-                  <div className="premium-card" style={{ padding: '2rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
+                <div className="admin-module fade-in">
+                  <div className="premium-card admin-module-card">
+                    <div className="admin-module-heading">
                       <div>
-                        <h2 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Gestão de Serviços</h2>
-                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Cadastre e gerencie os serviços oferecidos aos seus clientes.</p>
+                        <span className="admin-eyebrow">Seu catálogo</span>
+                        <h2 className="admin-module-title">Serviços oferecidos</h2>
+                        <p className="admin-module-copy">Cadastre e gerencie os serviços oferecidos aos seus clientes.</p>
                       </div>
                       <button onClick={() => openServiceModal()} className="btn-submit" style={{ width: 'auto', padding: '0 24px', background: '#0f172a', color: '#fff' }}>
                         + Novo Serviço
                       </button>
                     </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1.5rem' }}>
+                    <div className="admin-card-grid">
                       {tenant.services.length === 0 ? (
                         <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '4rem', background: 'rgba(255,255,255,0.02)', borderRadius: '20px' }}>
                           <p style={{ color: 'var(--text-secondary)' }}>Nenhum serviço cadastrado ainda.</p>
                         </div>
                       ) : tenant.services.map(s => (
-                        <div key={s.id} className="glass-card" style={{ padding: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div key={s.id} className="glass-card admin-service-card">
                           <div>
                             <h4 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '4px' }}>{s.name}</h4>
                             <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                              <p style={{ color: '#10b981', fontWeight: 800, fontSize: '1.1rem' }}>R$ {s.price.toFixed(2).replace('.', ',')}</p>
+                              <p className="admin-card-price">R$ {s.price.toFixed(2).replace('.', ',')}</p>
                               <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: '4px' }}>
                                 {s.duration || 30} min
                               </span>
@@ -1709,18 +2005,24 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                 </div>
 
               ) : activeTab === 'settings' ? (
-                <div className="fade-in">
-                  <div className="premium-card" style={{ padding: '2.5rem' }}>
-                    <div style={{ marginBottom: '2.5rem' }}>
-                      <h2 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Configurações do Perfil</h2>
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Gerencie a identidade visual e informações básicas do seu estabelecimento.</p>
+                <div className="admin-module fade-in">
+                  <div className="premium-card admin-module-card">
+                    <div className="admin-module-heading">
+                      <div>
+                        <span className="admin-eyebrow">Como o cliente vê sua marca</span>
+                        <h2 className="admin-module-title">Perfil e identidade visual</h2>
+                        <p className="admin-module-copy">A prévia é atualizada instantaneamente. As alterações são salvas ao sair do campo.</p>
+                      </div>
+                      <span className={`admin-save-state is-${profileSaveState}`}>
+                        <span></span>
+                        {profileSaveState === 'saving' ? 'Salvando…' : profileSaveState === 'error' ? 'Falha ao salvar' : 'Alterações salvas'}
+                      </span>
                     </div>
 
-                    <div style={{ display: 'grid', gap: '2rem' }}>
-                      {/* Info Form */}
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '2rem' }}>
+                    <div className="admin-settings-grid">
+                      <div className="admin-settings-fields">
                         <div className="form-group">
-                          <label style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 700, marginBottom: '8px', display: 'block' }}>WhatsApp de Contato</label>
+                          <label>WhatsApp de contato</label>
                           <input 
                             type="text" 
                             className="premium-input" 
@@ -1729,49 +2031,62 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                             onBlur={(e) => updateTenantProfile('whatsapp', e.target.value)}
                           />
                         </div>
-                        <div className="form-group">
-                          <label style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 700, marginBottom: '8px', display: 'block' }}>Cor da Marca</label>
-                          <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                        <div className="form-group admin-color-field">
+                          <label>Cor principal da marca</label>
+                          <div>
                             <input 
                               type="color" 
                               value={tenant.primaryColor || '#d4af37'} 
                               onChange={(e) => setTenant({ ...tenant, primaryColor: e.target.value })}
                               onBlur={(e) => updateTenantProfile('primaryColor', e.target.value)}
-                              style={{ width: '50px', height: '50px', border: 'none', borderRadius: '12px', cursor: 'pointer', background: 'transparent' }}
                             />
-                            <span style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>{tenant.primaryColor?.toUpperCase() || '#D4AF37'}</span>
+                            <span>{tenant.primaryColor?.toUpperCase() || '#D4AF37'}</span>
                           </div>
                         </div>
-                        <div className="form-group">
-                          <label style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 700, marginBottom: '8px', display: 'block' }}>Cor do Letreiro (Texto)</label>
-                          <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                        <div className="form-group admin-color-field">
+                          <label>Cor de texto preferida</label>
+                          <div>
                             <input 
                               type="color" 
                               value={tenant.secondaryColor || '#ffffff'} 
                               onChange={(e) => setTenant({ ...tenant, secondaryColor: e.target.value })}
                               onBlur={(e) => updateTenantProfile('secondaryColor', e.target.value)}
-                              style={{ width: '50px', height: '50px', border: 'none', borderRadius: '12px', cursor: 'pointer', background: 'transparent' }}
                             />
-                            <span style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>{tenant.secondaryColor?.toUpperCase() || '#FFFFFF'}</span>
+                            <span>{tenant.secondaryColor?.toUpperCase() || '#FFFFFF'}</span>
                           </div>
+                          <small>O sistema corrige automaticamente o texto quando a combinação não possui contraste suficiente.</small>
                         </div>
                       </div>
+                      <aside className="admin-brand-preview" aria-label="Prévia da identidade visual">
+                        <span className="admin-brand-preview-label">Prévia para o cliente</span>
+                        <div className="admin-brand-preview-stage" style={{ background: customerAccent, color: getReadableAccentText(customerAccent, customerSecondary) }}>
+                          <div className="admin-brand-preview-mark"><ProfessionIcon profession={tenant.profession} /></div>
+                          <span>Atendimento digital</span>
+                          <strong>{tenant.name}</strong>
+                          <p>Uma experiência simples, organizada e com a personalidade da sua marca.</p>
+                          <button type="button" style={{ color: getReadableAccentText(customerAccent, customerSecondary) }}>Entrar na fila</button>
+                        </div>
+                      </aside>
                     </div>
                   </div>
                 </div>
 
               ) : activeTab === 'scheduling' ? (
-                <div className="fade-in">
-                  <div className="premium-card" style={{ padding: '2rem' }}>
-                    <div style={{ marginBottom: '2.5rem' }}>
-                      <h2 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Gestão de atendimento</h2>
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Escolha como seus clientes devem agendar os serviços.</p>
+                <div className="admin-module fade-in">
+                  <div className="premium-card admin-module-card">
+                    <div className="admin-module-heading">
+                      <div>
+                        <span className="admin-eyebrow">Experiência de atendimento</span>
+                        <h2 className="admin-module-title">Como seus clientes serão atendidos?</h2>
+                        <p className="admin-module-copy">Escolha um modelo. A página do cliente é atualizada automaticamente.</p>
+                      </div>
                     </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1rem' }}>
+                    <div className="admin-booking-grid">
                       <button 
                         onClick={() => updateBookingType('queue')}
-                        className={`glass-card ${tenant.bookingType === 'queue' ? 'active-selection' : ''}`}
+                        className={`glass-card admin-booking-option ${tenant.bookingType === 'queue' ? 'active-selection' : ''}`}
+                        aria-pressed={tenant.bookingType === 'queue'}
                         style={{ 
                           padding: '2rem', 
                           textAlign: 'left', 
@@ -1790,7 +2105,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
                       <button 
                         onClick={() => updateBookingType('appointment')}
-                        className={`glass-card ${tenant.bookingType === 'appointment' ? 'active-selection' : ''}`}
+                        className={`glass-card admin-booking-option ${tenant.bookingType === 'appointment' ? 'active-selection' : ''}`}
+                        aria-pressed={tenant.bookingType === 'appointment'}
                         style={{ 
                           padding: '2rem', 
                           textAlign: 'left', 
@@ -1808,7 +2124,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                       </button>
                     </div>
 
-                    <div style={{ marginTop: '3rem', padding: '1.5rem', background: 'rgba(255,255,255,0.02)', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                    <div className="admin-notice-card">
                       <h4 style={{ fontSize: '0.95rem', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#eab308" strokeWidth="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
                         Nota importante
@@ -1819,7 +2135,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                     </div>
 
                     {tenant.bookingType === 'appointment' && (
-                      <div className="fade-in" style={{ marginTop: '3.5rem', paddingTop: '3.5rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                      <div className="fade-in admin-schedule-section">
                         <div style={{ marginBottom: '2.5rem' }}>
                           <h3 style={{ fontSize: '1.5rem', fontWeight: 800, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '12px' }}>
                             <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: 'rgba(var(--accent-primary-rgb), 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-primary)' }}>
@@ -1830,23 +2146,32 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                           <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem' }}>Personalize seu fluxo de trabalho e intervalos de descanso.</p>
                         </div>
 
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1.5rem', marginBottom: '2.5rem' }}>
+                        <div className="admin-settings-grid">
                           {/* Card: Tempo de Serviço */}
                           <div className="glass-card" style={{ padding: '2rem', border: '1px solid rgba(255,255,255,0.05)', background: 'rgba(255,255,255,0.01)' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '1.5rem' }}>
                               <div style={{ color: '#3b82f6' }}>
                                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
                               </div>
-                              <h4 style={{ fontSize: '1.1rem', fontWeight: 700, margin: 0 }}>Tempo de Atendimento</h4>
+                              <h4 style={{ fontSize: '1.1rem', fontWeight: 700, margin: 0 }}>Intervalo entre horários</h4>
                             </div>
                             <div className="form-group">
                               <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                                 <input 
                                   type="number" 
                                   className="premium-input"
-                                  value={tenant.appointmentInterval || 30} 
-                                  onChange={e => updateSchedulingSettings('appointment_interval', parseInt(e.target.value))} 
-                                  step="5" min="5" 
+                                  key={`${tenant.id}-${tenant.appointmentInterval}`}
+                                  defaultValue={tenant.appointmentInterval || 30}
+                                  onBlur={e => {
+                                    const value = Number(e.target.value);
+                                    if (!Number.isInteger(value) || value < 5 || value > 240) {
+                                      e.currentTarget.value = String(tenant.appointmentInterval || 30);
+                                      showToast('Use um intervalo entre 5 e 240 minutos.', 'warning');
+                                      return;
+                                    }
+                                    if (value !== tenant.appointmentInterval) void updateSchedulingSettings('appointment_interval', value);
+                                  }}
+                                  step="5" min="5" max="240"
                                   style={{ flex: 1, fontSize: '1.2rem', fontWeight: 700, textAlign: 'center' }}
                                 />
                                 <span style={{ fontSize: '1rem', color: 'var(--text-secondary)', fontWeight: 600 }}>minutos</span>
@@ -1870,16 +2195,32 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                                 <input 
                                   type="time" 
                                   className="premium-input"
-                                  value={tenant.lunchStart || '12:00'} 
-                                  onChange={e => updateSchedulingSettings('lunch_start', e.target.value)} 
+                                  key={`${tenant.id}-${tenant.lunchStart}-start`}
+                                  defaultValue={tenant.lunchStart || '12:00'}
+                                  onBlur={e => {
+                                    if (e.target.value >= (tenant.lunchEnd || '13:00')) {
+                                      e.currentTarget.value = tenant.lunchStart || '12:00';
+                                      showToast('O início do intervalo precisa ser antes do fim.', 'warning');
+                                      return;
+                                    }
+                                    if (e.target.value !== tenant.lunchStart) void updateSchedulingSettings('lunch_start', e.target.value);
+                                  }}
                                   style={{ flex: 1, fontWeight: 600 }}
                                 />
                                 <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>às</span>
                                 <input 
                                   type="time" 
                                   className="premium-input"
-                                  value={tenant.lunchEnd || '13:00'} 
-                                  onChange={e => updateSchedulingSettings('lunch_end', e.target.value)} 
+                                  key={`${tenant.id}-${tenant.lunchEnd}-end`}
+                                  defaultValue={tenant.lunchEnd || '13:00'}
+                                  onBlur={e => {
+                                    if (e.target.value <= (tenant.lunchStart || '12:00')) {
+                                      e.currentTarget.value = tenant.lunchEnd || '13:00';
+                                      showToast('O fim do intervalo precisa ser depois do início.', 'warning');
+                                      return;
+                                    }
+                                    if (e.target.value !== tenant.lunchEnd) void updateSchedulingSettings('lunch_end', e.target.value);
+                                  }}
                                   style={{ flex: 1, fontWeight: 600 }}
                                 />
                               </div>
@@ -1891,7 +2232,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                         </div>
 
                         {/* Weekly Schedule Section */}
-                        <div className="premium-card" style={{ padding: '2.5rem', background: 'rgba(255,255,255,0.015)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                        <div className="premium-card admin-schedule-section">
                           <div style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
                             <div>
                               <h4 style={{ fontSize: '1.2rem', fontWeight: 800, margin: 0 }}>Horário de Expediente</h4>
@@ -1899,14 +2240,14 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                             </div>
                           </div>
 
-                          <div style={{ display: 'grid', gap: '0.75rem' }}>
+                          <div className="admin-schedule-grid">
                             {['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'].map((dayName, idx) => {
                               const dayNum = idx === 6 ? 0 : idx + 1;
                               const wh = tenant.workingHours?.find(h => h.day === dayNum);
                               const isWorking = !!wh;
                               
                               return (
-                                <div key={dayNum} className={`schedule-row ${isWorking ? 'active' : 'inactive'}`} 
+                                <div key={dayNum} className={`schedule-row admin-schedule-row ${isWorking ? 'active' : 'inactive'}`}
                                   style={{ 
                                     display: 'flex', 
                                     alignItems: 'center', 
@@ -1925,6 +2266,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                                     <label className="switch">
                                       <input 
                                         type="checkbox" 
+                                        aria-label={`${isWorking ? 'Desativar' : 'Ativar'} expediente de ${dayName}`}
                                         checked={isWorking} 
                                         onChange={(e) => {
                                           if (e.target.checked) {
@@ -1941,7 +2283,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
                                   {isWorking && wh ? (
                                     <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexGrow: 1, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(15, 23, 42, 0.3)', padding: '10px 18px', borderRadius: '14px', border: '1px solid rgba(255, 255, 255, 0.08)', boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.1)' }}>
+                                      <div className="admin-time-range">
                                         <input type="time" className="time-input-minimal" value={wh.start} onChange={e => updateWorkingHours((tenant.workingHours || []).map(h => h.day === dayNum ? { ...h, start: e.target.value } : h))} />
                                         <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', fontWeight: 800, letterSpacing: '1px', opacity: 0.6 }}>ATÉ</span>
                                         <input type="time" className="time-input-minimal" value={wh.end} onChange={e => updateWorkingHours((tenant.workingHours || []).map(h => h.day === dayNum ? { ...h, end: e.target.value } : h))} />
@@ -1977,25 +2319,34 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                 </div>
 
               ) : activeTab === 'atendimento' ? (
-                <div className="admin-dashboard-container">
-                  <div className="admin-stats-row">
-                    <div className="admin-stat-card"><span className="stat-label">Concluídos Hoje</span><span className="stat-value">{completedCount}</span></div>
-                    <div className="admin-stat-card"><span className="stat-label">Em Espera</span><span className="stat-value">{waitingCount}</span></div>
-                    <div className="admin-stat-card"><span className="stat-label">Atendendo Agora</span><span className="stat-value">{servingCount}</span></div>
+                <div className="admin-dashboard-container admin-module">
+                  <div className="admin-stats-row admin-hero-stats">
+                    <div className="admin-stat-card admin-kpi-card is-accent">
+                      <div className="admin-kpi-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m5 12 4 4L19 6"/></svg></div>
+                      <div><span className="stat-label">Concluídos hoje</span><span className="stat-value">{completedCount}</span><small>Atendimentos finalizados</small></div>
+                    </div>
+                    <div className="admin-stat-card admin-kpi-card">
+                      <div className="admin-kpi-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+                      <div><span className="stat-label">{tenant.bookingType === 'appointment' ? 'Aguardando confirmação' : 'Aguardando agora'}</span><span className="stat-value">{tenant.bookingType === 'appointment' ? pendingCount : waitingCount}</span><small>{tenant.bookingType === 'appointment' ? 'Solicitações para hoje' : 'Pessoas na fila atual'}</small></div>
+                    </div>
+                    <div className="admin-stat-card admin-kpi-card">
+                      <div className="admin-kpi-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19v-2a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div>
+                      <div><span className="stat-label">Atendendo agora</span><span className="stat-value">{servingCount}</span><small>{servingCount ? 'Atendimento em andamento' : 'Nenhum atendimento iniciado'}</small></div>
+                    </div>
                   </div>
                   <div className="admin-queue-list-section">
-                    <div className="section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                      <h2 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Gestão de Hoje</h2>
+                    <div className="section-header admin-module-heading">
+                      <div><span className="admin-eyebrow">Fluxo do atendimento</span><h2 className="admin-module-title">{tenant.bookingType === 'queue' ? 'Fila atual' : 'Compromissos confirmados'}</h2><p className="admin-module-copy">Use a ação principal de cada cartão para conduzir o próximo passo.</p></div>
                       <div className="live-indicator"><span className="live-dot"></span>AO VIVO</div>
                     </div>
                     <div className="admin-queue-list">
-                      {todayQueue.filter(item => item.status !== 'pending' && item.status !== 'cancelled' && item.status !== 'completed').length === 0 ? (
+                      {activeTodayQueue.length === 0 ? (
                         <div className="empty-state" style={{ padding: '4rem', textAlign: 'center', borderRadius: '20px', border: '2px dashed rgba(0,0,0,0.05)' }}>
                           <p style={{ color: '#64748b', fontWeight: 500 }}>Nenhum atendimento confirmado para hoje.</p>
                         </div>
-                      ) : todayQueue.filter(item => item.status !== 'pending' && item.status !== 'cancelled' && item.status !== 'completed').map((item, index) => (
+                      ) : activeTodayQueue.map((item, index) => (
                         <div key={item.id} className={`admin-queue-item ${item.status}`}>
-                          <div className="item-pos">{index + 1}º</div>
+                          <div className="item-pos">{tenant.bookingType === 'appointment' && item.appointmentTime ? formatTimeISO(item.appointmentTime) : `${index + 1}º`}</div>
                           <div className="item-main">
                             <h4 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                               {item.name}
@@ -2005,14 +2356,20 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                             {item.status === 'serving' && item.startedAt && <TimeElapsed startedAt={item.startedAt} />}
                           </div>
                           <div className="item-actions">
-                            {item.status === 'serving' ? (
-                              <button onClick={() => handleCompleteService(item.id)} className="action-btn complete" style={{ background: '#10b981', color: '#fff', border: 'none', padding: '10px 18px', borderRadius: '10px', fontWeight: 700, fontSize: '0.85rem' }}>
-                                Concluir
+                            {item.status === 'pending' ? (
+                              <>
+                                <button disabled={Boolean(activeQueueActionId)} onClick={() => handleApproveAppointment(item.id)} className="action-btn approve">Confirmar</button>
+                                <button disabled={Boolean(activeQueueActionId)} onClick={() => handleRejectAppointment(item)} className="action-btn reject">Recusar</button>
+                              </>
+                            ) : item.status === 'serving' ? (
+                              <button disabled={Boolean(activeQueueActionId)} onClick={() => handleCompleteService(item.id)} className="action-btn complete" style={{ background: '#10b981', color: '#fff', border: 'none', padding: '10px 18px', borderRadius: '10px', fontWeight: 700, fontSize: '0.85rem' }}>
+                                {activeQueueActionId === item.id ? 'Concluindo…' : 'Concluir'}
                               </button>
                             ) : (
                               <>
                                 <button 
                                   onClick={() => handleCallClient(item.id)} 
+                                  disabled={Boolean(activeQueueActionId) || item.status === 'ready'}
                                   className="action-btn call" 
                                   style={{ background: item.status === 'ready' ? '#f1f5f9' : 'var(--accent-primary)', color: item.status === 'ready' ? '#64748b' : 'var(--accent-secondary)', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 700, fontSize: '0.8rem', cursor: 'pointer' }}
                                 >
@@ -2020,6 +2377,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                                 </button>
                                 <button 
                                   onClick={() => handleStartService(item.id)} 
+                                  disabled={Boolean(activeQueueActionId)}
                                   className="action-btn start" 
                                   style={{ background: '#0f172a', color: '#fff', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 700, fontSize: '0.8rem', cursor: 'pointer' }}
                                 >
@@ -2028,26 +2386,28 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                               </>
                             )}
                           </div>
-                          <button onClick={() => handleRemoveFromQueue(item)} className="btn-action-remove">✕</button>
+                          <button onClick={() => handleRemoveFromQueue(item)} className="btn-action-remove" aria-label={`Remover ${item.name} do atendimento`}>✕</button>
                         </div>
                       ))}
                     </div>
                   </div>
                 </div>
               ) : activeTab === 'agenda' ? (
-                <div className="admin-dashboard-container fade-in">
-                  <div className="agenda-view-wrapper" style={{ padding: '0.5rem' }}>
-                    <div className="section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2.5rem' }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                <div className="admin-dashboard-container admin-module fade-in">
+                  <div className="agenda-view-wrapper">
+                    <div className="section-header admin-module-heading">
+                      <div className="admin-agenda-heading">
                         <div>
-                          <h2 style={{ fontSize: '1.75rem', fontWeight: 900, letterSpacing: '-0.5px', marginBottom: '0.5rem' }}>Cronograma de Agendamentos</h2>
-                          <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem' }}>Gerencie suas reservas e solicitações futuras.</p>
+                          <span className="admin-eyebrow">Visão diária</span>
+                          <h2 className="admin-module-title">Cronograma de agendamentos</h2>
+                          <p className="admin-module-copy">Gerencie reservas e solicitações da data selecionada.</p>
                         </div>
                         
                         {/* Integrated Date Picker Filter */}
-                        <div className="agenda-date-filter" style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,0.03)', padding: '8px 16px', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.05)', width: 'fit-content' }}>
+                        <div className="agenda-date-filter admin-agenda-toolbar">
+                          <button type="button" className="admin-icon-button" onClick={() => changeAdminDateBy(-1)} aria-label="Dia anterior"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="m15 18-6-6 6-6"/></svg></button>
                           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
-                          <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Filtrar por data:</span>
+                          <span>Data</span>
                           <input 
                             type="date" 
                             value={adminSelectedDate}
@@ -2068,18 +2428,23 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                           />
                           {adminSelectedDate !== todayStr && (
                             <button 
-                              onClick={() => setAdminSelectedDate(todayStr)}
+                              type="button"
+                              onClick={() => {
+                                setAdminSelectedDate(todayStr);
+                                setSelectedDate(todayStr);
+                              }}
                               style={{ background: 'rgba(var(--accent-primary-rgb), 0.1)', color: 'var(--accent-primary)', border: 'none', padding: '4px 10px', borderRadius: '8px', fontSize: '0.7rem', fontWeight: 900, cursor: 'pointer' }}
                             >
                               HOJE
                             </button>
                           )}
+                          <button type="button" className="admin-icon-button" onClick={() => changeAdminDateBy(1)} aria-label="Próximo dia"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="m9 18 6-6-6-6"/></svg></button>
                         </div>
                       </div>
                       <div className="agenda-stats" style={{ display: 'flex', gap: '1.5rem' }}>
                         <div style={{ textAlign: 'right' }}>
-                          <span style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Total de Agendamentos</span>
-                          <span style={{ fontSize: '1.5rem', fontWeight: 900, color: 'var(--accent-primary)' }}>{futureAgenda.length}</span>
+                          <span style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Nesta data</span>
+                          <span style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--accent-primary)' }}>{filteredAgenda.length}</span>
                         </div>
                       </div>
                     </div>
@@ -2091,13 +2456,15 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                         </div>
                         <h3 style={{ fontSize: '1.5rem', fontWeight: 800, marginBottom: '0.75rem' }}>Agenda livre para este dia</h3>
                         <p style={{ color: 'var(--text-secondary)', maxWidth: '350px', margin: '0 auto 2rem', fontSize: '1rem', lineHeight: '1.6' }}>Não há compromissos marcados para {adminSelectedDate === todayStr ? 'hoje' : 'esta data'}.</p>
-                        <button 
-                          onClick={() => setIsAdminAddModalOpen(true)}
-                          className="btn-submit"
-                          style={{ width: 'auto', padding: '0 32px', height: '52px', borderRadius: '16px' }}
-                        >
-                          + Novo Agendamento
-                        </button>
+                        {adminSelectedDate >= todayStr && (
+                          <button
+                            onClick={openAdminAddModal}
+                            className="btn-submit"
+                            style={{ width: 'auto', padding: '0 32px', height: '52px', borderRadius: '16px' }}
+                          >
+                            + Novo Agendamento
+                          </button>
+                        )}
                       </div>
                     ) : (
                       <div className="agenda-timeline" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: '3.5rem' }}>
@@ -2136,9 +2503,9 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                             </div>
                           </div>
 
-                          <div style={{ paddingLeft: '74px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: '1.25rem' }}>
+                          <div className="admin-agenda-grid" style={{ paddingLeft: '74px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: '1.25rem' }}>
                             {filteredAgenda.map(item => (
-                              <div key={item.id} className="premium-agenda-card" style={{ 
+                              <div key={item.id} className="premium-agenda-card admin-agenda-card" style={{
                                 padding: '1.5rem', 
                                 background: 'var(--bg-surface)', 
                                 borderRadius: '24px', 
@@ -2197,8 +2564,9 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                                     <>
                                       <button 
                                         onClick={() => handleApproveAppointment(item.id)}
+                                        disabled={Boolean(activeQueueActionId)}
                                         className="approve-btn"
-                                        title="Confirmar"
+                                        aria-label={`Confirmar agendamento de ${item.name}`}
                                         style={{ 
                                           width: '40px', 
                                           height: '40px', 
@@ -2214,11 +2582,13 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                                         }}
                                       >
                                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                        <span>Confirmar</span>
                                       </button>
                                       <button 
                                         onClick={() => handleRejectAppointment(item)}
+                                        disabled={Boolean(activeQueueActionId)}
                                         className="reject-btn"
-                                        title="Recusar"
+                                        aria-label={`Recusar agendamento de ${item.name}`}
                                         style={{ 
                                           width: '40px', 
                                           height: '40px', 
@@ -2234,6 +2604,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                                         }}
                                       >
                                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                                        <span>Recusar</span>
                                       </button>
                                     </>
                                   ) : (
@@ -2272,21 +2643,31 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         </div>
       ) : (
         /* CLIENT VIEW */
-        <div className="app-container fade-in">
-          {/* Header Action */}
-          <div className="role-switcher">
-            <button onClick={toggleRole} className="btn-role">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px' }}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
-              Admin
-            </button>
-          </div>
+        <div className="app-container customer-app fade-in" style={customerThemeStyle}>
+          <header className="customer-topbar">
+            <div className="customer-platform-brand">
+              <BrandMark className="customer-platform-mark" />
+              <div>
+                <strong>Sua Vez</strong>
+                <span>Experiência digital</span>
+              </div>
+            </div>
+            <div className="customer-topbar-actions">
+              <span className="customer-topbar-note">Seu atendimento, no seu tempo</span>
+              <button onClick={toggleRole} className="btn-role" aria-label="Acessar área profissional">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                <span className="customer-role-label"><span className="customer-role-label-prefix">Área </span>profissional</span>
+              </button>
+            </div>
+          </header>
 
           {/* Hero Section */}
-          <section className="hero-section fade-in">
+          <section className="hero-section customer-hero fade-in">
             <div className="hero-background-glow"></div>
+            <div className="customer-hero-pattern" aria-hidden="true"></div>
             <div className="hero-content">
               <div className="hero-brand">
-                <div className="hero-logo-container">
+                <div className={`hero-logo-container ${tenant.hasLogo && tenant.logoUrl ? 'has-custom-logo' : 'has-profession-icon'}`}>
                   {tenant.hasLogo && tenant.logoUrl ? (
                     <img 
                       src={tenant.logoUrl} 
@@ -2294,13 +2675,15 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                       className="hero-logo-img"
                     />
                   ) : (
-                    <div 
-                      className="hero-logo-icon"
-                      dangerouslySetInnerHTML={{ __html: (prof?.iconSvg || '').replace('width="28" height="28"', 'width="48" height="48"') }}
-                    />
+                    <div className="hero-logo-icon">
+                      <ProfessionIcon profession={tenant.profession} className="profession-icon profession-icon--hero" />
+                    </div>
                   )}
                 </div>
                 <div className="hero-text">
+                  <span className="customer-hero-kicker">
+                    {tenant.bookingType === 'appointment' ? 'Agenda online' : 'Fila virtual'}
+                  </span>
                   <h1 className="hero-title">{tenant.name}</h1>
                   <p className="hero-subtitle">
                     {tenant.bookingType === 'appointment' 
@@ -2312,7 +2695,16 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
               <div className="hero-stats">
                  <div className="client-hero-actions">
-                   {myItemsInQueue.length === 0 && tenant.isOnline && (
+                   <div className="customer-hero-promise">
+                     <span className="customer-promise-icon">
+                       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+                     </span>
+                     <span>
+                       <strong>{tenant.bookingType === 'appointment' ? 'Seu horário, sem complicação' : 'Espere de onde quiser'}</strong>
+                       <small>{tenant.bookingType === 'appointment' ? 'Escolha o melhor momento para você.' : 'Acompanhe sua posição em tempo real.'}</small>
+                     </span>
+                   </div>
+                   {myItemsInQueue.length === 0 && (tenant.bookingType === 'appointment' || tenant.isOnline) && (
                      <button 
                        onClick={() => document.querySelector('.form-panel')?.scrollIntoView({ behavior: 'smooth' })}
                        className="hero-cta-button"
@@ -2323,15 +2715,15 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                    {products.length > 0 && (
                      <button
                        onClick={() => setShowStoreModal(true)}
-                       style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '12px 24px', borderRadius: '12px', border: '2px solid #0f172a', background: 'transparent', color: '#0f172a', fontWeight: 700, cursor: 'pointer', fontSize: '0.95rem', marginTop: '0.5rem' }}
+                       className="customer-store-button"
                      >
                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path><line x1="3" y1="6" x2="21" y2="6"></line><path d="M16 10a4 4 0 0 1-8 0"></path></svg>
                        Acessar a Loja
                      </button>
                    )}
-                   <div className={`hero-online-badge ${tenant.isOnline ? 'online' : 'offline'}`}>
+                   <div className={`hero-online-badge ${tenant.bookingType === 'appointment' || tenant.isOnline ? 'online' : 'offline'}`}>
                      <span className="pulse-dot"></span>
-                     {tenant.isOnline ? 'Aberto Agora' : 'Fechado no Momento'}
+                     {tenant.bookingType === 'appointment' ? 'Agenda online' : (tenant.isOnline ? 'Aberto agora' : 'Fechado no momento')}
                    </div>
                  </div>
               </div>
@@ -2339,27 +2731,37 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
           </section>
 
           {/* Client Content */}
-          <div className="status-summary-container fade-in">
+          <div className="status-summary-container customer-status-grid fade-in">
             <div className="status-summary-card serving">
-              <div className="status-info">
-                <span className="status-value">{servingCount}</span>
-                <span className="status-label">Em Atendimento</span>
+              <div className="customer-status-copy">
+                <span className="customer-status-eyebrow">{tenant.bookingType === 'appointment' ? 'Na data escolhida' : 'Movimento agora'}</span>
+                <div className="status-info">
+                  <span className="status-value">{tenant.bookingType === 'appointment' ? (selectedService ? availableTimeSlots.length : '—') : servingCount}</span>
+                  <span className="status-label">{tenant.bookingType === 'appointment' ? 'Horários livres' : 'Em atendimento'}</span>
+                </div>
               </div>
-              <div className="status-icon-glow"></div>
+              <span className="customer-status-icon">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M8 7V3m8 4V3M5 10h14"/><rect x="4" y="5" width="16" height="15" rx="3"/><path d="m9 15 2 2 4-5"/></svg>
+              </span>
             </div>
             <div className="status-summary-card waiting">
-              <div className="status-info">
-                <span className="status-value">{waitingCount}</span>
-                <span className="status-label">Na Espera</span>
+              <div className="customer-status-copy">
+                <span className="customer-status-eyebrow">{tenant.bookingType === 'appointment' ? 'Agenda do dia' : 'Próximos da vez'}</span>
+                <div className="status-info">
+                  <span className="status-value">{tenant.bookingType === 'appointment' ? selectedDayAppointments.length : waitingCount}</span>
+                  <span className="status-label">{tenant.bookingType === 'appointment' ? 'Reservas' : 'Na espera'}</span>
+                </div>
               </div>
-              <div className="status-icon-glow"></div>
+              <span className="customer-status-icon">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6m3-3h-6"/></svg>
+              </span>
             </div>
           </div>
 
-          <main className="main-content">
+          <main className="main-content customer-main-content">
             {/* Form Section */}
-            <section className="form-panel glass-panel">
-              {!tenant.isOnline ? (
+            <section className="form-panel glass-panel customer-form-panel">
+              {tenant.bookingType === 'queue' && !tenant.isOnline ? (
                 <div style={{ textAlign: 'center', padding: '3rem 1rem' }}>
                   <div style={{ width: '64px', height: '64px', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem' }}>
                     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
@@ -2409,7 +2811,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                               display: 'flex', 
                               alignItems: 'center', 
                               gap: '4px', 
-                              color: notifsEnabled ? '#10b981' : '#ef4444',
+                              color: notifsEnabled ? 'var(--accent-primary)' : '#ef4444',
                               cursor: 'pointer',
                               fontWeight: 600
                             }}
@@ -2427,7 +2829,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                         if (myWaitIndex >= 0 && myWaitIndex < 2) {
                           if (item.isOnWay) {
                             return (
-                              <div className="fade-in" style={{ padding: '12px', background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.2)', color: '#10b981', borderRadius: '12px', textAlign: 'center', fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                              <div className="fade-in" style={{ padding: '12px', background: 'color-mix(in srgb, var(--accent-primary) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--accent-primary) 22%, transparent)', color: 'var(--accent-primary)', borderRadius: '12px', textAlign: 'center', fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
                                 Profissional avisado!
                               </div>
@@ -2489,22 +2891,34 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                   )}
                 </div>
               ) : (
-                <form onSubmit={handleJoinQueue} className="join-form">
-                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
-                    <div style={{ padding: '10px', background: 'rgba(var(--accent-primary-rgb), 0.1)', borderRadius: '12px', color: 'var(--accent-primary)' }}>
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><polyline points="16 11 18 13 22 9"></polyline></svg>
+                <form onSubmit={handleJoinQueue} className="join-form customer-join-form">
+                   <div className="customer-form-heading">
+                    <div className="customer-form-icon">
+                      {tenant.bookingType === 'appointment' ? (
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M8 3v3m8-3v3M4 9h16"/><rect x="3" y="5" width="18" height="16" rx="4"/><path d="m9 15 2 2 4-5"/></svg>
+                      ) : (
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><polyline points="16 11 18 13 22 9"></polyline></svg>
+                      )}
                     </div>
                     <div>
-                      <h2 style={{ fontSize: '1.4rem', color: 'var(--text-primary)' }}>{tenant.bookingType === 'appointment' ? 'Agendar Horário' : 'Entrar na Fila'}</h2>
+                      <span>{tenant.bookingType === 'appointment' ? 'Agendamento online' : 'Vamos começar'}</span>
+                      <h2>{tenant.bookingType === 'appointment' ? 'Agende seu horário' : 'Garanta seu lugar'}</h2>
+                      <p>{tenant.bookingType === 'appointment' ? 'Escolha o serviço, o dia e o melhor horário para você.' : 'É rápido e leva menos de um minuto.'}</p>
                     </div>
                   </div>
                   <div className="form-group">
-                    <label>Seu Nome</label>
-                    <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex: João" required />
+                    <label htmlFor="customer-name">Seu nome</label>
+                    <div className="customer-input-shell">
+                      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+                      <input id="customer-name" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Como podemos chamar você?" required />
+                    </div>
                   </div>
                   <div className="form-group">
-                    <label>WhatsApp</label>
-                    <input type="tel" value={customerWhatsapp} onChange={handlePhoneChange} placeholder="(00) 90000-0000" required />
+                    <label htmlFor="customer-whatsapp">WhatsApp</label>
+                    <div className="customer-input-shell">
+                      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.5 9.5 0 0 1-4-.9l-5 1 1.1-4.8a8.7 8.7 0 1 1 16.9-3.7Z"/><path d="M8.5 8.4c.7 3 2.1 4.4 5.1 5.1"/></svg>
+                      <input id="customer-whatsapp" type="tel" value={customerWhatsapp} onChange={handlePhoneChange} placeholder="(00) 90000-0000" required />
+                    </div>
                   </div>
                   <div className="form-group">
                     <label>Serviço</label>
@@ -2513,24 +2927,35 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                         type="button" 
                         className={`selector-trigger ${isServiceListOpen ? 'open' : ''}`}
                         onClick={() => setIsServiceListOpen(!isServiceListOpen)}
+                        aria-expanded={isServiceListOpen}
+                        aria-haspopup="listbox"
                       >
-                        <span>{tenant.services.find(s => s.id === selectedServiceId)?.name || 'Selecione um serviço'}</span>
+                        <span className="selector-trigger-copy">
+                          <strong>{selectedService?.name || 'Selecione um serviço'}</strong>
+                          <small>{selectedService ? `${selectedService.duration || 30} min · R$ ${selectedService.price.toFixed(2).replace('.', ',')}` : 'Veja duração e valor antes de continuar'}</small>
+                        </span>
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
                       </button>
                       
                       {isServiceListOpen && (
-                        <div className="simple-vertical-list fade-in">
+                        <div className="simple-vertical-list fade-in" role="listbox" aria-label="Serviços disponíveis">
                           {tenant.services.map(s => (
                             <button 
                               key={s.id} 
                               type="button" 
                               className={`simple-list-item ${selectedServiceId === s.id ? 'active' : ''}`}
+                              role="option"
+                              aria-selected={selectedServiceId === s.id}
                               onClick={() => {
                                 setSelectedServiceId(s.id);
+                                setSelectedTimeSlot('');
                                 setIsServiceListOpen(false);
                               }}
                             >
-                              <span className="svc-name">{s.name}</span>
+                              <span className="svc-copy">
+                                <span className="svc-name">{s.name}</span>
+                                <small>{s.duration || 30} minutos</small>
+                              </span>
                               <span className="svc-price">R$ {s.price.toFixed(2).replace('.', ',')}</span>
                             </button>
                           ))}
@@ -2540,34 +2965,81 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                   </div>
 
                   {tenant.bookingType === 'appointment' && (
-                    <div className="fade-in" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '1.5rem' }}>
-                      <div className="form-group">
-                        <label>Data</label>
-                        <input 
-                          type="date" 
-                          value={selectedDate} 
-                          min={new Date().toISOString().split('T')[0]}
-                          onChange={(e) => {
-                            setSelectedDate(e.target.value);
-                            setSelectedTimeSlot('');
-                          }} 
-                          required 
-                        />
+                    <div className="fade-in customer-schedule-fields">
+                      <div className="appointment-step">
+                        <div className="appointment-step-heading">
+                          <span className="appointment-step-number">1</span>
+                          <span>
+                            <strong>Escolha o dia</strong>
+                            <small>Você pode agendar a partir de hoje</small>
+                          </span>
+                        </div>
+                        <label className="appointment-date-control" htmlFor="appointment-date">
+                          <span className="appointment-control-icon">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M8 3v3m8-3v3M4 9h16"/><rect x="3" y="5" width="18" height="16" rx="4"/></svg>
+                          </span>
+                          <span className="appointment-date-copy">
+                            <small>Data do atendimento</small>
+                            <input
+                              id="appointment-date"
+                              type="date"
+                              value={selectedDate}
+                              min={todayStr}
+                              onChange={(e) => {
+                                setSelectedDate(e.target.value);
+                                setSelectedTimeSlot('');
+                              }}
+                              required
+                            />
+                          </span>
+                        </label>
                       </div>
-                      <div className="form-group">
-                        <label>Horário</label>
-                        <select 
-                          value={selectedTimeSlot} 
-                          onChange={(e) => setSelectedTimeSlot(e.target.value)} 
-                          required
-                          className="premium-select"
-                        >
-                          <option value="">Selecione</option>
-                          {generateTimeSlots().map(slot => (
-                            <option key={slot} value={slot}>{slot}</option>
-                          ))}
-                        </select>
+                      <div className="appointment-step">
+                        <div className="appointment-step-heading">
+                          <span className="appointment-step-number">2</span>
+                          <span>
+                            <strong>Escolha o horário</strong>
+                            <small>{selectedService ? `${availableTimeSlots.length} opções disponíveis` : 'Selecione primeiro um serviço'}</small>
+                          </span>
+                        </div>
+                        {!selectedService ? (
+                          <div className="appointment-slot-message">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 8v4m0 4h.01"/><circle cx="12" cy="12" r="9"/></svg>
+                            Escolha um serviço para ver os horários exatos.
+                          </div>
+                        ) : availableTimeSlots.length > 0 ? (
+                          <div className="appointment-time-grid" role="group" aria-label="Horários disponíveis">
+                            {availableTimeSlots.map(slot => (
+                              <button
+                                key={slot}
+                                type="button"
+                                className={`appointment-time-slot ${selectedTimeSlot === slot ? 'selected' : ''}`}
+                                onClick={() => setSelectedTimeSlot(slot)}
+                                aria-pressed={selectedTimeSlot === slot}
+                              >
+                                {slot}
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="appointment-slot-message unavailable">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/></svg>
+                            Não há horários livres neste dia. Tente outra data.
+                          </div>
+                        )}
                       </div>
+                      {selectedService && selectedTimeSlot && (
+                        <div className="appointment-selection-summary" aria-live="polite">
+                          <span className="appointment-summary-check">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="m5 12 4 4L19 6"/></svg>
+                          </span>
+                          <span>
+                            <small>Seu agendamento</small>
+                            <strong>{selectedService.name} · {new Date(`${selectedDate}T12:00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })} às {selectedTimeSlot}</strong>
+                          </span>
+                          <b>R$ {selectedService.price.toFixed(2).replace('.', ',')}</b>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -2592,9 +3064,23 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                     </div>
                   )}
 
-                  <button type="submit" className="btn-submit" style={{ marginTop: '1.5rem' }} disabled={loading}>
-                    {loading ? 'Aguarde...' : 'Confirmar'}
+                  <button
+                    type="submit"
+                    className="btn-submit customer-submit-button"
+                    style={{ marginTop: '1.5rem' }}
+                    disabled={loading || !selectedServiceId || (tenant.bookingType === 'appointment' && !selectedTimeSlot)}
+                  >
+                    {loading
+                      ? 'Aguarde...'
+                      : tenant.bookingType === 'appointment'
+                        ? (selectedTimeSlot ? 'Confirmar agendamento' : 'Escolha um horário')
+                        : 'Entrar na fila agora'}
+                    {!loading && <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>}
                   </button>
+                  <p className="customer-form-assurance">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+                    Seus dados são usados somente neste atendimento.
+                  </p>
                   
                   {myItemsInQueue.length > 0 && (
                     <button 
@@ -2611,87 +3097,113 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
             </section>
 
             {/* Queue Section */}
-            <section className="queue-panel">
-               <div className="queue-header" style={{ marginBottom: '2rem' }}>
-                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1rem', flexWrap: 'wrap', gap: '1.25rem' }}>
-                  <div style={{ flex: 1, minWidth: '250px' }}>
-                    <h2 style={{ margin: '0 0 6px 0' }}>{tenant.bookingType === 'appointment' ? 'Acompanhe a Agenda' : 'Acompanhe a Fila'}</h2>
+            <section className="queue-panel customer-queue-panel">
+               <div className="queue-header customer-queue-header">
+                 <div className="customer-queue-header-inner">
+                   <div className="customer-queue-heading-copy">
+                     <span className="customer-section-kicker">Atualização em tempo real</span>
+                     <h2 style={{ margin: '0 0 6px 0' }}>{tenant.bookingType === 'appointment' ? 'Agenda do dia' : 'Acompanhe a Fila'}</h2>
                     <p style={{ fontSize: '0.95rem', color: 'var(--text-secondary)', margin: 0, opacity: 0.9, lineHeight: '1.5' }}>
                       {tenant.bookingType === 'appointment' 
-                        ? 'Deseja consultar a disponibilidade para outros dias? Selecione uma data ao lado para conferir os horários.' 
-                        : 'Deseja ver o movimento da fila para outros dias? Use o seletor de data ao lado.'}
+                        ? 'Consulte os horários já reservados sem expor os dados de outros clientes.'
+                        : 'Veja a ordem dos clientes na fila de atendimento para hoje.'}
                     </p>
                   </div>
-                  <div className="client-date-filter" style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(var(--accent-primary-rgb), 0.05)', padding: '8px 16px', borderRadius: '16px', border: '1px solid rgba(var(--accent-primary-rgb), 0.1)', height: 'fit-content' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="2.5"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
-                      <input 
-                        type="date" 
-                        value={selectedDate}
-                        onChange={(e) => {
-                          setSelectedDate(e.target.value);
-                          setSelectedTimeSlot('');
-                        }}
-                        style={{ 
-                          background: 'transparent', 
-                          border: 'none', 
-                          color: 'var(--text-primary)', 
-                          fontSize: '0.9rem', 
-                          fontWeight: 800, 
-                          outline: 'none',
-                          cursor: 'pointer',
-                          fontFamily: 'inherit'
-                        }}
-                      />
+                  {tenant.bookingType === 'appointment' && (
+                    <div className="client-date-filter" style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(var(--accent-primary-rgb), 0.05)', padding: '8px 16px', borderRadius: '16px', border: '1px solid rgba(var(--accent-primary-rgb), 0.1)', height: 'fit-content' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="2.5"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                        <input
+                          type="date"
+                          value={selectedDate}
+                          min={todayStr}
+                          onChange={(e) => {
+                            setSelectedDate(e.target.value);
+                            setSelectedTimeSlot('');
+                          }}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--text-primary)',
+                            fontSize: '0.95rem',
+                            fontWeight: 600,
+                            outline: 'none',
+                            cursor: 'pointer',
+                            fontFamily: 'inherit'
+                          }}
+                        />
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
               <div className="queue-list" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-                {groupedClientQueue[selectedDate] && groupedClientQueue[selectedDate].filter(i => i.status !== 'cancelled').length > 0 ? (
+                {publicQueueItems.length > 0 ? (
                   <div className="client-day-group fade-in">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '1.25rem' }}>
                       <span style={{ fontSize: '0.8rem', fontWeight: 800, color: 'var(--accent-primary)', textTransform: 'uppercase', background: 'rgba(var(--accent-primary-rgb), 0.1)', padding: '4px 10px', borderRadius: '8px' }}>
-                        {selectedDate === todayStr ? 'Hoje' : new Date(selectedDate + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
+                        {tenant.bookingType === 'queue' ? 'Agora' : clientQueueDate === todayStr ? 'Hoje' : new Date(clientQueueDate + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
                       </span>
                       <span style={{ fontSize: '0.9rem', fontWeight: 600, opacity: 0.6 }}>
-                        {new Date(selectedDate + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long' })}
+                        {tenant.bookingType === 'queue' ? 'Ordem de chegada em tempo real' : new Date(clientQueueDate + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long' })}
                       </span>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                      {groupedClientQueue[selectedDate]
-                        .filter(item => item.status !== 'cancelled')
-                        .sort((a,b) => (a.appointmentTime||a.joinedAt).localeCompare(b.appointmentTime||b.joinedAt))
-                        .map((item, index) => (
+                      {publicQueueItems.map((item, index) => (
                         <div key={item.id} className={`queue-item glass-card ${item.status}`} style={{ padding: '1.25rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                          <div style={{ fontSize: '1.2rem', fontWeight: 800, opacity: 0.6, minWidth: '60px', color: item.status === 'ready' ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>
+                          <div className="customer-queue-time">
                             {tenant.bookingType === 'appointment' && item.appointmentTime ? formatTimeISO(item.appointmentTime) : `${index + 1}º`}
                           </div>
                           <div style={{ flexGrow: 1 }}>
-                            <h4 style={{ color: 'var(--text-primary)', marginBottom: '4px' }}>{item.name}</h4>
+                            <h4 className="customer-queue-name">
+                              {tenant.bookingType === 'appointment' && !myQueueItemIds.includes(item.id) ? 'Horário reservado' : item.name}
+                            </h4>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                              <span style={{ fontSize: '0.8rem', opacity: 0.7, fontWeight: 500 }}>{item.serviceName}</span>
-                              <span style={{ fontSize: '0.75rem', color: 'var(--accent-primary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-                                Tempo estimado: {item.duration || 30} min
+                              <span className="customer-queue-service">
+                                {tenant.bookingType === 'appointment' && !myQueueItemIds.includes(item.id) ? 'Indisponível para agendamento' : item.serviceName}
                               </span>
+                              {(tenant.bookingType !== 'appointment' || myQueueItemIds.includes(item.id)) && (
+                                <span className="customer-queue-duration">
+                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                                  Duração: {item.duration || 30} min
+                                </span>
+                              )}
                             </div>
                             {item.status === 'serving' && item.startedAt && <TimeElapsed startedAt={item.startedAt} />}
                           </div>
-                          <span className={`status-badge ${item.status}`}>{item.status === 'serving' ? 'Atendendo' : (tenant.bookingType === 'appointment' ? (item.status === 'pending' ? 'Pendente' : 'Confirmado') : 'Aguardando')}</span>
+                          <span className={`status-badge ${item.status}`}>
+                            {item.status === 'serving'
+                              ? 'Atendendo'
+                              : tenant.bookingType === 'appointment'
+                                ? (myQueueItemIds.includes(item.id) ? (item.status === 'pending' ? 'Pendente' : 'Confirmado') : 'Reservado')
+                                : 'Aguardando'}
+                          </span>
                         </div>
                       ))}
                     </div>
                   </div>
                 ) : (
-                  <div className="premium-empty-state" style={{ padding: '4rem 2rem', textAlign: 'center', borderRadius: '32px', background: 'rgba(255,255,255,0.01)', border: '2px dashed rgba(255,255,255,0.05)' }}>
-                    <div style={{ width: '80px', height: '80px', background: 'linear-gradient(135deg, rgba(var(--accent-primary-rgb), 0.1), transparent)', borderRadius: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem' }}>
-                      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="1.5" opacity="0.6"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                  <div className="premium-empty-state customer-empty-state">
+                    <div className="customer-empty-icon">
+                      {tenant.bookingType === 'appointment' ? (
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="1.5"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                      ) : (
+                        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="12" r="1.5"/><circle cx="11" cy="12" r="1.8"/><circle cx="17" cy="12" r="2.1"/><path d="M19 12h3m-2-2 2 2-2 2"/></svg>
+                      )}
                     </div>
-                    <h3 style={{ fontSize: '1.25rem', fontWeight: 800, marginBottom: '0.5rem', color: 'var(--text-primary)' }}>Agenda livre para este dia</h3>
+                    <span className="customer-empty-kicker">Tudo tranquilo por aqui</span>
+                    <h3>{tenant.bookingType === 'appointment' ? 'Agenda livre para este dia' : 'A fila está livre agora'}</h3>
                     <p style={{ color: 'var(--text-secondary)', maxWidth: '300px', margin: '0 auto', fontSize: '0.95rem', lineHeight: '1.5' }}>
-                      {selectedDate === todayStr ? 'Não há compromissos marcados para hoje.' : `Não há compromissos marcados para o dia ${new Date(selectedDate + 'T12:00:00').toLocaleDateString('pt-BR')}.`}
+                      {tenant.bookingType === 'appointment'
+                        ? (selectedDate === todayStr ? 'Não há compromissos marcados para hoje.' : `Não há compromissos marcados para o dia ${new Date(selectedDate + 'T12:00:00').toLocaleDateString('pt-BR')}.`)
+                        : 'Entre agora e seja uma das próximas pessoas a serem atendidas.'}
                     </p>
+                    {(tenant.bookingType === 'appointment' || tenant.isOnline) && myItemsInQueue.length === 0 && (
+                      <button type="button" className="customer-empty-cta" onClick={() => document.querySelector('.customer-form-panel')?.scrollIntoView({ behavior: 'smooth' })}>
+                        {tenant.bookingType === 'appointment' ? 'Agendar agora' : 'Quero ser o primeiro'}
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -2705,7 +3217,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       {showConfirmation && (
         <div className="modal-overlay" style={{ zIndex: 10000 }}>
           <div className="modal-content glass-panel fade-in" style={{ maxWidth: '400px', textAlign: 'center', background: 'var(--bg-surface)' }}>
-            <div style={{ width: '64px', height: '64px', background: '#10b981', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem' }}>
+            <div style={{ width: '64px', height: '64px', background: 'var(--accent-primary)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem', color: 'var(--customer-on-accent, #fff)' }}>
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
             </div>
             <h3 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>Sucesso!</h3>
@@ -2736,8 +3248,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
               <button 
                 onClick={async () => {
                   setShowJoinConfirmation(false);
-                  if (import.meta.env.PROD) requestNotificationPermission();
-                  await confirmJoinQueue();
+                  const pushId = import.meta.env.PROD ? await requestNotificationPermission() : null;
+                  await confirmJoinQueue(pushId);
                 }} 
                 className="btn-submit"
               >
@@ -2783,11 +3295,11 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       {/* Admin Delete Confirmation Modal */}
       {showAdminDeleteModal && (
         <div className="modal-overlay" style={{ zIndex: 10005 }}>
-          <div className="modal-content glass-panel fade-in" style={{ maxWidth: '400px', textAlign: 'center', padding: '2.5rem' }}>
+          <div className="modal-content glass-panel admin-modal fade-in" role="alertdialog" aria-modal="true" aria-labelledby="admin-delete-title" style={{ maxWidth: '400px', textAlign: 'center', padding: '2.5rem' }}>
             <div style={{ width: '64px', height: '64px', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem', color: '#ef4444' }}>
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path><line x1="12" y1="2" x2="12" y2="12"></line></svg>
             </div>
-            <h3 style={{ fontSize: '1.5rem', marginBottom: '0.75rem', color: 'var(--text-primary)' }}>Remover Cliente?</h3>
+            <h3 id="admin-delete-title" style={{ fontSize: '1.5rem', marginBottom: '0.75rem', color: 'var(--text-primary)' }}>Remover cliente?</h3>
             <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem', fontSize: '0.95rem', lineHeight: '1.5' }}>
               Você está prestes a remover <strong>{itemToDelete?.name}</strong> da fila. Esta ação não pode ser desfeita.
             </p>
@@ -2847,7 +3359,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                     )}
                     <div style={{ padding: '0.875rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', flexGrow: 1 }}>
                       <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.95rem', lineHeight: 1.3 }}>{p.name}</div>
-                      <div style={{ fontWeight: 900, color: '#10b981', fontSize: '1.15rem' }}>R$ {p.price.toFixed(2).replace('.',',')}</div>
+                      <div style={{ fontWeight: 800, color: 'var(--accent-primary)', fontSize: '1.15rem' }}>R$ {p.price.toFixed(2).replace('.',',')}</div>
                       <a
                         href={waLink}
                         target="_blank"
@@ -2885,10 +3397,10 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       {/* Service Management Modal */}
       {showServiceModal && (
         <div className="modal-overlay fade-in">
-          <div className="modal-content glass-panel" style={{ maxWidth: '450px' }}>
-            <div className="modal-header">
-              <h3 style={{ fontSize: '1.25rem' }}>{editingService ? 'Editar Serviço' : 'Novo Serviço'}</h3>
-              <button onClick={() => setShowServiceModal(false)} className="btn-close-modal">✕</button>
+          <div className="modal-content glass-panel admin-modal" role="dialog" aria-modal="true" aria-labelledby="service-modal-title" style={{ maxWidth: '450px' }}>
+            <div className="modal-header admin-modal-header">
+              <h3 id="service-modal-title" style={{ fontSize: '1.25rem' }}>{editingService ? 'Editar Serviço' : 'Novo Serviço'}</h3>
+              <button onClick={() => setShowServiceModal(false)} className="btn-close-modal" aria-label="Fechar cadastro de serviço">✕</button>
             </div>
             <form onSubmit={handleSaveService} className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
               <div className="form-group">
@@ -2906,6 +3418,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                 <label style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 700 }}>Preço (R$)</label>
                 <input 
                   type="text" 
+                  inputMode="decimal"
                   value={newServicePrice} 
                   onChange={e => setNewServicePrice(e.target.value)}
                   placeholder="ex: 35,00" 
@@ -2921,6 +3434,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                   onChange={e => setNewServiceDuration(e.target.value)}
                   placeholder="ex: 45" 
                   className="premium-input"
+                  min="5"
+                  max="600"
                   required
                 />
               </div>
