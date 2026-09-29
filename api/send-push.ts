@@ -17,15 +17,15 @@ type QueueRecord = {
 };
 
 type TenantRecord = {
+  id: string;
   name: string;
   slug: string;
-  admin_push_id: string | null;
 };
 
 type EventMessage = {
   title: string;
   message: string;
-  target: { subscriptionId: string };
+  target: { subscriptionId: string } | { externalId: string };
   actionLabel: string;
 };
 
@@ -102,7 +102,8 @@ async function getSupabaseRow<T>(path: string): Promise<T | null> {
 
 function buildMessage(event: PushEventName, item: QueueRecord, tenant: TenantRecord): EventMessage | null {
   const clientTarget = item.push_id ? { subscriptionId: item.push_id } : null;
-  const adminTarget = tenant.admin_push_id ? { subscriptionId: tenant.admin_push_id } : null;
+  // Um External ID reúne as assinaturas do mesmo profissional no celular e no desktop.
+  const adminTarget = { externalId: `admin_${tenant.id}` };
 
   if (event === 'client_joined' && adminTarget && ['waiting', 'pending'].includes(item.status)) {
     const scheduled = Boolean(item.appointment_time);
@@ -165,7 +166,7 @@ export default {
 
     try {
       const itemQuery = `queue_items?id=eq.${encodeURIComponent(queueItemId)}&tenant_id=eq.${encodeURIComponent(tenantId)}&select=id,name,service_name,status,is_on_way,push_id,appointment_time`;
-      const tenantQuery = `tenants?id=eq.${encodeURIComponent(tenantId)}&select=name,slug,admin_push_id`;
+      const tenantQuery = `tenants?id=eq.${encodeURIComponent(tenantId)}&select=id,name,slug`;
       const [item, tenant] = await Promise.all([
         getSupabaseRow<QueueRecord>(itemQuery),
         getSupabaseRow<TenantRecord>(tenantQuery),
@@ -176,13 +177,20 @@ export default {
       if (!eventMessage) return json({ skipped: true, reason: 'Event state or subscription is not eligible' }, 202);
 
       const appId = process.env.ONESIGNAL_APP_ID || process.env.VITE_ONESIGNAL_APP_ID;
-      const restApiKey = process.env.ONESIGNAL_REST_API_KEY;
+      // Compatibilidade temporária com projetos que ainda cadastraram a chave com o
+      // prefixo antigo. A chave nunca é importada pelo bundle do navegador.
+      const restApiKey = process.env.ONESIGNAL_REST_API_KEY || process.env.VITE_ONESIGNAL_REST_API_KEY;
       if (!appId || !restApiKey) return json({ error: 'Push provider is not configured' }, 503);
 
       const appOrigin = process.env.APP_ORIGIN?.replace(/\/$/, '') || new URL(request.url).origin;
       const destinationUrl = `${appOrigin}/${tenant.slug}`;
-      const idempotencyKey = await stableUuid(`${event}:${tenantId}:${queueItemId}:${eventMessage.target.subscriptionId}`);
-      const target = { include_subscription_ids: [eventMessage.target.subscriptionId] };
+      const targetIdentity = 'subscriptionId' in eventMessage.target
+        ? eventMessage.target.subscriptionId
+        : eventMessage.target.externalId;
+      const idempotencyKey = await stableUuid(`${event}:${tenantId}:${queueItemId}:${targetIdentity}`);
+      const target = 'subscriptionId' in eventMessage.target
+        ? { include_subscription_ids: [eventMessage.target.subscriptionId] }
+        : { include_aliases: { external_id: [eventMessage.target.externalId] }, target_channel: 'push' };
 
       const oneSignalResponse = await fetch('https://api.onesignal.com/notifications?c=push', {
         method: 'POST',

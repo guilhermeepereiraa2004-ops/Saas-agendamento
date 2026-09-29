@@ -5,7 +5,8 @@ import { supabase } from './lib/supabase';
 import FinancialView from './FinancialView';
 import { getProfessionConfig } from './lib/professionConfig';
 import { useToasts } from './lib/toast';
-import { requestNotificationPermission, getOneSignalId, sendPushNotification, isNotificationEnabled } from './lib/oneSignal';
+import { requestNotificationPermission, getOneSignalId, sendPushNotification, isNotificationEnabled, loginOneSignal, logoutOneSignal } from './lib/oneSignal';
+import { playNotificationSound } from './lib/notificationSound';
 import { BrandMark } from './LandingPage';
 import { ProfessionIcon } from './components/ProfessionIcon';
 
@@ -281,6 +282,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
           if (document.querySelector('.professional-admin')) {
             const isAppointment = Boolean(newItem.appointmentTime);
+            playNotificationSound();
             window.dispatchEvent(new CustomEvent('suavez:notification', {
               detail: {
                 title: isAppointment ? 'Novo agendamento' : 'Novo cliente na fila',
@@ -392,13 +394,14 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const [showAdminDeleteModal, setShowAdminDeleteModal] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<QueueItem | null>(null);
   const [showServiceModal, setShowServiceModal] = useState(false);
+  const [showMobileJoinModal, setShowMobileJoinModal] = useState(false);
   const [editingService, setEditingService] = useState<Service | null>(null);
   const [newServiceName, setNewServiceName] = useState('');
   const [newServicePrice, setNewServicePrice] = useState('');
   const [newServiceDuration, setNewServiceDuration] = useState('30');
   const [profileSaveState, setProfileSaveState] = useState<'saved' | 'saving' | 'error'>('saved');
 
-  const [notifsEnabled, setNotifsEnabled] = useState(true);
+  const [notifsEnabled, setNotifsEnabled] = useState(false);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(max-width: 1020px)');
@@ -409,6 +412,20 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     mediaQuery.addEventListener('change', handleChange);
     return () => mediaQuery.removeEventListener('change', handleChange);
   }, []);
+
+  useEffect(() => {
+    if (!showMobileJoinModal) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowMobileJoinModal(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [showMobileJoinModal]);
 
   useEffect(() => {
     if (!isAdminAddModalOpen && !showServiceModal && !showAdminDeleteModal) return;
@@ -440,6 +457,27 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     window.addEventListener('suavez:push-state', handlePushState);
     return () => window.removeEventListener('suavez:push-state', handlePushState);
   }, []);
+
+  const enableNotifications = async () => {
+    if (isAuthenticated) await loginOneSignal(`admin_${tenant.id}`);
+    const pushId = await requestNotificationPermission();
+    if (!pushId) {
+      showToast('Não foi possível ativar. Verifique a permissão do navegador e, no iPhone, abra o app pela Tela de Início.', 'warning');
+      return null;
+    }
+
+    if (isAuthenticated) {
+      const { error } = await supabase.from('tenants').update({ admin_push_id: pushId }).eq('id', tenant.id);
+      if (error) {
+        showToast('As notificações foram ativadas neste dispositivo, mas não foi possível sincronizar o cadastro.', 'warning');
+        return pushId;
+      }
+    }
+
+    setNotifsEnabled(true);
+    showToast('Notificações e aviso sonoro ativados neste dispositivo.', 'success');
+    return pushId;
+  };
 
   // Load stats from localStorage on mount (for persistent auth)
   useEffect(() => {
@@ -489,6 +527,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     if (isAuthenticated) {
       fetchTasks();
       fetchProducts();
+
+      void loginOneSignal(`admin_${tenant.id}`);
 
       const syncAdminSubscription = async (providedId?: string | null) => {
         const pushId = providedId === undefined ? await getOneSignalId() : providedId;
@@ -698,6 +738,17 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
   const myItemsInQueue = queue.filter(item => myQueueItemIds.includes(item.id));
 
+  const openCustomerJoin = () => {
+    setForceShowJoinForm(myItemsInQueue.length > 0);
+    if (window.matchMedia('(max-width: 980px)').matches) {
+      setShowMobileJoinModal(true);
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      document.querySelector('.customer-form-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  };
+
   // Limpar localStorage se não estiver mais na fila
   useEffect(() => {
     if (myQueueItemIds.length > 0 && queue.length > 0) {
@@ -887,6 +938,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         localStorage.setItem(`suavez_customer_ids_${tenant.id}`, JSON.stringify(newIds));
         localStorage.setItem(`suavez_in_queue_${tenant.id}`, 'true');
         setForceShowJoinForm(false);
+        setShowMobileJoinModal(false);
         
         // Forçar atualização manual da fila caso o realtime falhe
         fetchData();
@@ -1105,7 +1157,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       // Persistir login para não deslogar ao atualizar
       localStorage.setItem(`suavez_auth_${tenant.slug}`, 'true');
       
-      void requestNotificationPermission().then(async pushId => {
+      void loginOneSignal(`admin_${tenant.id}`).then(() => requestNotificationPermission()).then(async pushId => {
         if (!pushId) return;
         const { error } = await supabase.from('tenants').update({ admin_push_id: pushId }).eq('id', tenant.id);
         if (error) showToast('Login realizado, mas as notificações não puderam ser ativadas.', 'warning');
@@ -1168,9 +1220,9 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     setIsAuthenticated(false);
     localStorage.removeItem(`suavez_auth_${tenant.slug}`);
     void getOneSignalId().then(pushId => {
-      if (!pushId) return;
+      if (!pushId) return undefined;
       return supabase.from('tenants').update({ admin_push_id: null }).eq('id', tenant.id).eq('admin_push_id', pushId);
-    });
+    }).finally(() => logoutOneSignal());
   };
 
   const toggleRole = () => {
@@ -1645,6 +1697,15 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                 </div>
               </div>
               <div className="topbar-actions">
+                  <button
+                    type="button"
+                    className={`admin-notification-toggle ${notifsEnabled ? 'enabled' : ''}`}
+                    onClick={() => void enableNotifications()}
+                    aria-label={notifsEnabled ? 'Notificações ativas neste dispositivo' : 'Ativar notificações neste dispositivo'}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                    <span>{notifsEnabled ? 'Avisos ativos' : 'Ativar avisos'}</span>
+                  </button>
                   <div className="admin-mode-pill">
                     <span>{tenant.bookingType === 'queue' ? 'Ordem de chegada' : 'Horário marcado'}</span>
                     {(activeTab === 'atendimento' || activeTab === 'agenda') && (
@@ -2706,7 +2767,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                    </div>
                    {myItemsInQueue.length === 0 && (tenant.bookingType === 'appointment' || tenant.isOnline) && (
                      <button 
-                       onClick={() => document.querySelector('.form-panel')?.scrollIntoView({ behavior: 'smooth' })}
+                       onClick={openCustomerJoin}
                        className="hero-cta-button"
                      >
                        {tenant.bookingType === 'appointment' ? 'Agendar Agora' : 'Garantir meu Lugar'}
@@ -2758,9 +2819,31 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
             </div>
           </div>
 
+          {showMobileJoinModal && (
+            <button
+              type="button"
+              className="mobile-join-backdrop"
+              onClick={() => setShowMobileJoinModal(false)}
+              aria-label="Fechar formulário"
+            />
+          )}
+
           <main className="main-content customer-main-content">
             {/* Form Section */}
-            <section className="form-panel glass-panel customer-form-panel">
+            <section
+              className={`form-panel glass-panel customer-form-panel ${showMobileJoinModal ? 'mobile-join-modal is-open' : ''} ${myItemsInQueue.length > 0 && !forceShowJoinForm ? 'has-active-presence' : ''}`}
+              role={showMobileJoinModal ? 'dialog' : undefined}
+              aria-modal={showMobileJoinModal ? true : undefined}
+              aria-label={showMobileJoinModal ? (tenant.bookingType === 'appointment' ? 'Fazer agendamento' : 'Entrar na fila') : undefined}
+            >
+              <button
+                type="button"
+                className="mobile-join-close"
+                onClick={() => setShowMobileJoinModal(false)}
+                aria-label="Fechar formulário"
+              >
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m6 6 12 12M18 6 6 18"/></svg>
+              </button>
               {tenant.bookingType === 'queue' && !tenant.isOnline ? (
                 <div style={{ textAlign: 'center', padding: '3rem 1rem' }}>
                   <div style={{ width: '64px', height: '64px', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem' }}>
@@ -2805,7 +2888,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                         <div className="monitor-footer">
                           <div className="live-indicator"><span className="live-dot"></span>AO VIVO</div>
                           <div 
-                            onClick={() => requestNotificationPermission()}
+                            onClick={() => void enableNotifications()}
                             style={{ 
                               fontSize: '0.65rem', 
                               display: 'flex', 
@@ -2875,7 +2958,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                   {myItemsInQueue.length < 4 ? (
                     <button 
                       onClick={() => {
-                        setForceShowJoinForm(true);
+                        openCustomerJoin();
                         setName('');
                         setCustomerWhatsapp('');
                       }} 
@@ -3055,7 +3138,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                       </p>
                       <button 
                         type="button" 
-                        onClick={() => requestNotificationPermission()}
+                        onClick={() => void enableNotifications()}
                         className="btn-secondary" 
                         style={{ width: '100%', fontSize: '0.85rem', padding: '10px', background: 'white' }}
                       >
@@ -3085,7 +3168,10 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                   {myItemsInQueue.length > 0 && (
                     <button 
                       type="button" 
-                      onClick={() => setForceShowJoinForm(false)} 
+                      onClick={() => {
+                        setForceShowJoinForm(false);
+                        setShowMobileJoinModal(false);
+                      }}
                       className="btn-secondary"
                       style={{ width: '100%', marginTop: '0.75rem' }}
                     >
@@ -3137,6 +3223,17 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                   )}
                 </div>
               </div>
+              {(tenant.bookingType === 'appointment' || tenant.isOnline) && myItemsInQueue.length < 4 && (
+                <div className="mobile-join-cta-wrap">
+                  <button type="button" className="mobile-join-cta" onClick={openCustomerJoin}>
+                    <span>
+                      <small>{tenant.bookingType === 'appointment' ? 'Escolha dia e horário' : 'Atendimento por ordem de chegada'}</small>
+                      <strong>{tenant.bookingType === 'appointment' ? 'Agendar meu horário' : 'Garantir meu lugar'}</strong>
+                    </span>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                  </button>
+                </div>
+              )}
               <div className="queue-list" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
                 {publicQueueItems.length > 0 ? (
                   <div className="client-day-group fade-in">
@@ -3199,7 +3296,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                         : 'Entre agora e seja uma das próximas pessoas a serem atendidas.'}
                     </p>
                     {(tenant.bookingType === 'appointment' || tenant.isOnline) && myItemsInQueue.length === 0 && (
-                      <button type="button" className="customer-empty-cta" onClick={() => document.querySelector('.customer-form-panel')?.scrollIntoView({ behavior: 'smooth' })}>
+                      <button type="button" className="customer-empty-cta" onClick={openCustomerJoin}>
                         {tenant.bookingType === 'appointment' ? 'Agendar agora' : 'Quero ser o primeiro'}
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
                       </button>

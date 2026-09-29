@@ -1,3 +1,5 @@
+import { playNotificationSound, unlockNotificationSound } from './notificationSound';
+
 export type PushEventName =
   | 'client_joined'
   | 'client_called'
@@ -33,11 +35,15 @@ interface OneSignalSubscription {
 
 interface OneSignalClient {
   init: (options: Record<string, unknown>) => Promise<void>;
+  login: (externalId: string) => Promise<void>;
+  logout: () => Promise<void>;
   Slidedown: {
     promptPush: () => Promise<void>;
   };
   Notifications: {
     permission: boolean;
+    permissionNative?: NotificationPermission;
+    isPushSupported: () => boolean;
     requestPermission: () => Promise<void>;
     addEventListener: {
       (event: 'permissionChange', listener: () => void): void;
@@ -106,11 +112,6 @@ function waitForSubscriptionId(oneSignal: OneSignalClient, timeoutMs = 12000): P
 export function initializeOneSignal() {
   const appId = import.meta.env.VITE_ONESIGNAL_APP_ID;
 
-  if (import.meta.env.DEV) {
-    console.info('OneSignal: desativado no ambiente de desenvolvimento.');
-    return;
-  }
-
   if (!appId || appId === 'seu_app_id_do_onesignal_aqui') {
     console.warn('OneSignal: VITE_ONESIGNAL_APP_ID não configurado.');
     return;
@@ -118,6 +119,9 @@ export function initializeOneSignal() {
 
   if (window._oneSignalInitialized) return;
   window._oneSignalInitialized = true;
+  const unlockSound = () => void unlockNotificationSound();
+  window.addEventListener('pointerdown', unlockSound, { once: true, passive: true });
+  window.addEventListener('keydown', unlockSound, { once: true });
   window.OneSignalDeferred = window.OneSignalDeferred || [];
 
   window.OneSignalDeferred.push(async oneSignal => {
@@ -126,6 +130,7 @@ export function initializeOneSignal() {
         appId,
         allowLocalhostAsSecureOrigin: true,
         autoResubscribe: true,
+        persistNotification: true,
         notificationClickHandlerMatch: 'origin',
         notificationClickHandlerAction: 'focus',
         serviceWorkerPath: '/OneSignalSDKWorker.js',
@@ -140,6 +145,7 @@ export function initializeOneSignal() {
         oneSignal.User.PushSubscription.addEventListener('change', updateState);
         oneSignal.Notifications.addEventListener('foregroundWillDisplay', event => {
           const notification = event.notification || {};
+          playNotificationSound();
           window.dispatchEvent(new CustomEvent('suavez:notification', {
             detail: {
               title: notification.title || 'Nova atualização',
@@ -160,19 +166,25 @@ export function initializeOneSignal() {
 }
 
 export function requestNotificationPermission(): Promise<string | null> {
-  if (!import.meta.env.PROD) return Promise.resolve(null);
+  void unlockNotificationSound();
 
   return new Promise(resolve => {
     const sdkTimeout = window.setTimeout(() => resolve(null), 15000);
     window.OneSignalDeferred = window.OneSignalDeferred || [];
     window.OneSignalDeferred.push(async oneSignal => {
       try {
+        if (!oneSignal.Notifications.isPushSupported()) {
+          console.warn('OneSignal: este navegador não oferece suporte a push web.');
+          publishPushState(oneSignal);
+          window.clearTimeout(sdkTimeout);
+          resolve(null);
+          return;
+        }
+
         if (!oneSignal.Notifications.permission) {
-          try {
-            await oneSignal.Slidedown.promptPush();
-          } catch {
-            await oneSignal.Notifications.requestPermission();
-          }
+          // O botão da aplicação já funciona como pre-prompt. A solicitação nativa
+          // precisa acontecer diretamente dentro do gesto do usuário, sobretudo no mobile.
+          await oneSignal.Notifications.requestPermission();
         }
 
         if (!oneSignal.Notifications.permission) {
@@ -200,8 +212,6 @@ export function requestNotificationPermission(): Promise<string | null> {
 }
 
 export function isNotificationEnabled(): Promise<boolean> {
-  if (!import.meta.env.PROD) return Promise.resolve(true);
-
   return new Promise(resolve => {
     const timeout = window.setTimeout(() => resolve(false), 2500);
     window.OneSignalDeferred = window.OneSignalDeferred || [];
@@ -214,8 +224,6 @@ export function isNotificationEnabled(): Promise<boolean> {
 }
 
 export function getOneSignalId(): Promise<string | null> {
-  if (!import.meta.env.PROD) return Promise.resolve(null);
-
   return new Promise(resolve => {
     const sdkTimeout = window.setTimeout(() => resolve(null), 13000);
     window.OneSignalDeferred = window.OneSignalDeferred || [];
@@ -232,9 +240,42 @@ export function getOneSignalId(): Promise<string | null> {
   });
 }
 
-export async function sendPushNotification(event: PushEventName, tenantId: string, queueItemId: string) {
-  if (!import.meta.env.PROD) return;
+export function loginOneSignal(externalId: string): Promise<boolean> {
+  return new Promise(resolve => {
+    const sdkTimeout = window.setTimeout(() => resolve(false), 15000);
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    window.OneSignalDeferred.push(async oneSignal => {
+      try {
+        await oneSignal.login(externalId);
+        window.clearTimeout(sdkTimeout);
+        resolve(true);
+      } catch (error) {
+        window.clearTimeout(sdkTimeout);
+        console.error('OneSignal: não foi possível identificar o dispositivo.', error);
+        resolve(false);
+      }
+    });
+  });
+}
 
+export function logoutOneSignal(): Promise<void> {
+  return new Promise(resolve => {
+    const sdkTimeout = window.setTimeout(resolve, 5000);
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    window.OneSignalDeferred.push(async oneSignal => {
+      try {
+        await oneSignal.logout();
+      } catch (error) {
+        console.error('OneSignal: não foi possível encerrar a identificação do dispositivo.', error);
+      } finally {
+        window.clearTimeout(sdkTimeout);
+        resolve();
+      }
+    });
+  });
+}
+
+export async function sendPushNotification(event: PushEventName, tenantId: string, queueItemId: string) {
   try {
     const response = await fetch('/api/send-push', {
       method: 'POST',
