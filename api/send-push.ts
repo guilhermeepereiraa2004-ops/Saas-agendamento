@@ -55,7 +55,7 @@ function isSameOriginRequest(request: Request) {
   if (!origin) return false;
 
   const requestOrigin = new URL(request.url).origin;
-  const configuredOrigin = process.env.APP_ORIGIN?.replace(/\/$/, '');
+  const configuredOrigin = process.env.APP_ORIGIN?.trim().replace(/\/$/, '');
   const allowedOrigin = origin === requestOrigin || origin === configuredOrigin;
   const fetchSite = request.headers.get('sec-fetch-site');
   return allowedOrigin && (!fetchSite || fetchSite === 'same-origin' || fetchSite === 'same-site');
@@ -84,8 +84,8 @@ async function stableUuid(value: string) {
 }
 
 async function getSupabaseRow<T>(path: string): Promise<T | null> {
-  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+  const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL)?.trim().replace(/\/$/, '');
+  const supabaseKey = (process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY)?.trim();
   if (!supabaseUrl || !supabaseKey) throw new Error('Supabase server environment is not configured');
 
   const response = await fetch(`${supabaseUrl}/rest/v1/${path}`, {
@@ -176,13 +176,13 @@ export default {
       const eventMessage = buildMessage(event, item, tenant);
       if (!eventMessage) return json({ skipped: true, reason: 'Event state or subscription is not eligible' }, 202);
 
-      const appId = process.env.ONESIGNAL_APP_ID || process.env.VITE_ONESIGNAL_APP_ID;
+      const appId = (process.env.ONESIGNAL_APP_ID || process.env.VITE_ONESIGNAL_APP_ID)?.trim();
       // Compatibilidade temporária com projetos que ainda cadastraram a chave com o
       // prefixo antigo. A chave nunca é importada pelo bundle do navegador.
-      const restApiKey = process.env.ONESIGNAL_REST_API_KEY || process.env.VITE_ONESIGNAL_REST_API_KEY;
+      const restApiKey = (process.env.ONESIGNAL_REST_API_KEY || process.env.VITE_ONESIGNAL_REST_API_KEY)?.trim();
       if (!appId || !restApiKey) return json({ error: 'Push provider is not configured' }, 503);
 
-      const appOrigin = process.env.APP_ORIGIN?.replace(/\/$/, '') || new URL(request.url).origin;
+      const appOrigin = process.env.APP_ORIGIN?.trim().replace(/\/$/, '') || new URL(request.url).origin;
       const destinationUrl = `${appOrigin}/${tenant.slug}`;
       const targetIdentity = 'subscriptionId' in eventMessage.target
         ? eventMessage.target.subscriptionId

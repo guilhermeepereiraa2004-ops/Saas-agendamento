@@ -110,7 +110,7 @@ function waitForSubscriptionId(oneSignal: OneSignalClient, timeoutMs = 12000): P
 }
 
 export function initializeOneSignal() {
-  const appId = import.meta.env.VITE_ONESIGNAL_APP_ID;
+  const appId = import.meta.env.VITE_ONESIGNAL_APP_ID?.trim();
 
   if (!appId || appId === 'seu_app_id_do_onesignal_aqui') {
     console.warn('OneSignal: VITE_ONESIGNAL_APP_ID não configurado.');
