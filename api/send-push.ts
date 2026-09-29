@@ -217,7 +217,15 @@ export default {
 
       const providerResult = await oneSignalResponse.json().catch(() => ({}));
       if (!oneSignalResponse.ok) {
-        console.error('OneSignal send failed', { status: oneSignalResponse.status, event, queueItemId });
+        const providerErrors = providerResult && typeof providerResult === 'object' && 'errors' in providerResult
+          ? (providerResult as { errors?: unknown }).errors
+          : undefined;
+        console.error('OneSignal send failed', {
+          status: oneSignalResponse.status,
+          event,
+          queueItemId,
+          errors: providerErrors,
+        });
         return json({ error: 'Push provider rejected the notification' }, 502);
       }
 

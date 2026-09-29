@@ -8,6 +8,12 @@ export type PushEventName =
   | 'appointment_approved'
   | 'appointment_rejected';
 
+export type PushSendResult = {
+  sent: boolean;
+  reason?: string;
+  error?: string;
+};
+
 interface SubscriptionSnapshot {
   id?: string | null;
 }
@@ -275,7 +281,7 @@ export function logoutOneSignal(): Promise<void> {
   });
 }
 
-export async function sendPushNotification(event: PushEventName, tenantId: string, queueItemId: string) {
+export async function sendPushNotification(event: PushEventName, tenantId: string, queueItemId: string): Promise<PushSendResult> {
   try {
     const response = await fetch('/api/send-push', {
       method: 'POST',
@@ -284,11 +290,23 @@ export async function sendPushNotification(event: PushEventName, tenantId: strin
       keepalive: true,
     });
 
+    const result = await response.json().catch(() => ({})) as {
+      sent?: boolean;
+      reason?: string;
+      error?: string;
+    };
+
     if (!response.ok) {
-      const result: unknown = await response.json().catch(() => ({}));
       console.error('OneSignal: o servidor recusou o envio.', result);
+      return { sent: false, error: result.error || 'Push provider rejected the notification' };
     }
+
+    return {
+      sent: Boolean(result.sent),
+      reason: result.reason,
+    };
   } catch (error) {
     console.error('OneSignal: falha ao solicitar o envio.', error);
+    return { sent: false, error: 'Could not request the notification' };
   }
 }

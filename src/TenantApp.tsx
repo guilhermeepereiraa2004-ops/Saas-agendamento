@@ -472,6 +472,12 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         showToast('As notificações foram ativadas neste dispositivo, mas não foi possível sincronizar o cadastro.', 'warning');
         return pushId;
       }
+    } else {
+      const synced = await syncCustomerSubscription(pushId);
+      if (!synced && myQueueItemIds.length > 0) {
+        showToast('As notificações foram ativadas, mas não foi possível vinculá-las ao seu atendimento.', 'warning');
+        return pushId;
+      }
     }
 
     setNotifsEnabled(true);
@@ -717,6 +723,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       queue.forEach(item => {
         const prevItem = prevQueueRef.current.find(p => p.id === item.id);
         if (item.isOnWay && (!prevItem || !prevItem.isOnWay)) {
+          playNotificationSound();
           showToast(`🚗 O cliente ${item.name} confirmou que está a caminho!`, 'info');
         }
       });
@@ -737,6 +744,41 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const [forceShowJoinForm, setForceShowJoinForm] = useState(false);
 
   const myItemsInQueue = queue.filter(item => myQueueItemIds.includes(item.id));
+
+  const syncCustomerSubscription = useCallback(async (providedId?: string | null) => {
+    if (isAuthenticated || myQueueItemIds.length === 0) return true;
+
+    const pushId = providedId === undefined ? await getOneSignalId() : providedId;
+    if (!pushId) return false;
+
+    const { error } = await supabase
+      .from('queue_items')
+      .update({ push_id: pushId })
+      .eq('tenant_id', tenant.id)
+      .in('id', myQueueItemIds);
+
+    if (error) {
+      console.error('Não foi possível vincular as notificações aos atendimentos do cliente.', error);
+      return false;
+    }
+
+    setQueue(current => current.map(item =>
+      myQueueItemIds.includes(item.id) ? { ...item, pushId } : item
+    ));
+    return true;
+  }, [isAuthenticated, myQueueItemIds, tenant.id]);
+
+  useEffect(() => {
+    if (isAuthenticated || myQueueItemIds.length === 0) return;
+
+    void syncCustomerSubscription();
+    const handlePushState = (event: Event) => {
+      const detail = (event as CustomEvent<{ enabled?: boolean; id?: string | null }>).detail;
+      if (detail?.enabled && detail.id) void syncCustomerSubscription(detail.id);
+    };
+    window.addEventListener('suavez:push-state', handlePushState);
+    return () => window.removeEventListener('suavez:push-state', handlePushState);
+  }, [isAuthenticated, myQueueItemIds.length, syncCustomerSubscription]);
 
   const openCustomerJoin = () => {
     setForceShowJoinForm(myItemsInQueue.length > 0);
@@ -838,9 +880,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         return;
       }
       showToast(`Agendamento de ${item.name} confirmado! ✅`, 'success');
-      if (item.pushId) {
-        void sendPushNotification('appointment_approved', tenant.id, item.id);
-      }
+      void sendPushNotification('appointment_approved', tenant.id, item.id);
     } finally {
       setActiveQueueActionId(null);
     }
@@ -862,9 +902,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         return;
       }
       showToast('Agendamento recusado.', 'info');
-      if (item.pushId) {
-        void sendPushNotification('appointment_rejected', tenant.id, item.id);
-      }
+      void sendPushNotification('appointment_rejected', tenant.id, item.id);
     } finally {
       setActiveQueueActionId(null);
     }
@@ -1052,7 +1090,10 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         return;
       }
       showToast(`Cliente ${client.name} chamado!`, 'success');
-      if (client.pushId) void sendPushNotification('client_called', tenant.id, client.id);
+      const delivery = await sendPushNotification('client_called', tenant.id, client.id);
+      if (!delivery.sent) {
+        showToast('Cliente chamado, mas o push não foi entregue. A chamada continuará visível na página do cliente.', 'warning');
+      }
     } finally {
       setActiveQueueActionId(null);
     }
@@ -1079,7 +1120,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         return;
       }
       showToast(`Atendimento de ${client.name} iniciado.`, 'success');
-      if (client.pushId) void sendPushNotification('service_started', tenant.id, client.id);
+      void sendPushNotification('service_started', tenant.id, client.id);
     } finally {
       setActiveQueueActionId(null);
     }
@@ -2871,14 +2912,18 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                       <div className="my-status-monitor fade-in" style={{ marginBottom: '1rem' }}>
                         <div className="monitor-glow"></div>
                         <div className="monitor-content">
-                          <p className="monitor-label">{item.status === 'serving' ? 'Status Atual' : 'Posição Atual'}</p>
+                          <p className="monitor-label">{item.status === 'ready' ? 'Você foi chamado' : item.status === 'serving' ? 'Status Atual' : 'Posição Atual'}</p>
                           <div className="monitor-value">
-                            {item.status === 'serving' 
+                            {item.status === 'ready'
+                              ? <span style={{ fontSize: '2rem' }}>É SUA VEZ</span>
+                              : item.status === 'serving'
                               ? <span style={{ fontSize: '2.5rem' }}>VOCÊ</span> 
                               : `${todayQueue.findIndex(q => q.id === item.id) + 1}º`}
                           </div>
                           <p className="monitor-subtext">
-                            {item.status === 'serving' 
+                            {item.status === 'ready'
+                              ? 'Dirija-se ao atendimento ou confirme que está a caminho'
+                              : item.status === 'serving'
                               ? 'Você está em atendimento agora!' 
                               : todayQueue.findIndex(q => q.id === item.id) === 0 
                                 ? 'Próximo da fila!' 
@@ -2906,10 +2951,13 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                       </div>
 
                       {(() => {
-                        const waitingItems = queue.filter(q => q.status === 'waiting');
+                        const waitingItems = todayQueue.filter(q => q.status === 'waiting');
                         const myWaitIndex = waitingItems.findIndex(q => q.id === item.id);
-                        
-                        if (myWaitIndex >= 0 && myWaitIndex < 2) {
+
+                        const canConfirmOnWay = item.status === 'ready'
+                          || (item.status === 'waiting' && myWaitIndex >= 0 && myWaitIndex < 2);
+
+                        if (canConfirmOnWay) {
                           if (item.isOnWay) {
                             return (
                               <div className="fade-in" style={{ padding: '12px', background: 'color-mix(in srgb, var(--accent-primary) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--accent-primary) 22%, transparent)', color: 'var(--accent-primary)', borderRadius: '12px', textAlign: 'center', fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
@@ -2917,7 +2965,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                                 Profissional avisado!
                               </div>
                             );
-                          } else if (item.status === 'waiting') {
+                          } else {
                             return (
                               <button 
                                 onClick={() => handleConfirmOnWay(item.id)} 
