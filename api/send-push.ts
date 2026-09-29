@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 type PushEventName =
   | 'client_joined'
   | 'client_called'
