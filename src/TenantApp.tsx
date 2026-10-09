@@ -402,6 +402,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const [profileSaveState, setProfileSaveState] = useState<'saved' | 'saving' | 'error'>('saved');
 
   const [notifsEnabled, setNotifsEnabled] = useState(false);
+  const [notifsEnabling, setNotifsEnabling] = useState(false);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(max-width: 1020px)');
@@ -459,30 +460,45 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   }, []);
 
   const enableNotifications = async () => {
-    if (isAuthenticated) await loginOneSignal(`admin_${tenant.id}`);
-    const pushId = await requestNotificationPermission();
-    if (!pushId) {
-      showToast('Não foi possível ativar. Verifique a permissão do navegador e, no iPhone, abra o app pela Tela de Início.', 'warning');
-      return null;
-    }
+    if (notifsEnabling) return null;
+    setNotifsEnabling(true);
 
-    if (isAuthenticated) {
-      const { error } = await supabase.from('tenants').update({ admin_push_id: pushId }).eq('id', tenant.id);
-      if (error) {
-        showToast('As notificações foram ativadas neste dispositivo, mas não foi possível sincronizar o cadastro.', 'warning');
-        return pushId;
+    try {
+      if (isAuthenticated) await loginOneSignal(`admin_${tenant.id}`);
+      const pushId = await requestNotificationPermission();
+      if (!pushId) {
+        const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent);
+        const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+          || Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
+        const message = typeof Notification !== 'undefined' && Notification.permission === 'denied'
+          ? 'As notificações estão bloqueadas. Libere-as nas configurações do navegador e tente novamente.'
+          : isIos && !isStandalone
+            ? 'No iPhone, adicione o Sua Vez à Tela de Início, abra por esse ícone e tente novamente.'
+            : 'Não foi possível ativar as notificações neste navegador.';
+        showToast(message, 'warning');
+        return null;
       }
-    } else {
-      const synced = await syncCustomerSubscription(pushId);
-      if (!synced && myQueueItemIds.length > 0) {
-        showToast('As notificações foram ativadas, mas não foi possível vinculá-las ao seu atendimento.', 'warning');
-        return pushId;
-      }
-    }
 
-    setNotifsEnabled(true);
-    showToast('Notificações e aviso sonoro ativados neste dispositivo.', 'success');
-    return pushId;
+      if (isAuthenticated) {
+        const { error } = await supabase.from('tenants').update({ admin_push_id: pushId }).eq('id', tenant.id);
+        if (error) {
+          showToast('As notificações foram ativadas neste dispositivo, mas não foi possível sincronizar o cadastro.', 'warning');
+          return pushId;
+        }
+      } else {
+        const synced = await syncCustomerSubscription(pushId);
+        if (!synced && myQueueItemIds.length > 0) {
+          showToast('As notificações foram ativadas, mas não foi possível vinculá-las ao seu atendimento.', 'warning');
+          return pushId;
+        }
+      }
+
+      setNotifsEnabled(true);
+      showToast('Notificações e aviso sonoro ativados neste dispositivo.', 'success');
+      return pushId;
+    } finally {
+      setNotifsEnabling(false);
+    }
   };
 
   // Load stats from localStorage on mount (for persistent auth)
@@ -1591,7 +1607,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
       {isAuthenticated ? (
         /* PROFESSIONAL ADMIN LAYOUT */
-        <div className="admin-layout-wrapper professional-admin fade-in" style={adminThemeStyle}>
+        <div className="admin-layout-wrapper professional-admin" style={adminThemeStyle}>
           {/* MOBILE BACKDROP */}
           {isMobileMenuOpen && (
             <button className="sidebar-mobile-backdrop" onClick={() => setIsMobileMenuOpen(false)} aria-label="Fechar menu"></button>
@@ -1742,10 +1758,11 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                     type="button"
                     className={`admin-notification-toggle ${notifsEnabled ? 'enabled' : ''}`}
                     onClick={() => void enableNotifications()}
+                    disabled={notifsEnabling}
                     aria-label={notifsEnabled ? 'Notificações ativas neste dispositivo' : 'Ativar notificações neste dispositivo'}
                   >
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-                    <span>{notifsEnabled ? 'Avisos ativos' : 'Ativar avisos'}</span>
+                    <span>{notifsEnabled ? 'Avisos ativos' : notifsEnabling ? 'Ativando…' : 'Ativar avisos'}</span>
                   </button>
                   <div className="admin-mode-pill">
                     <span>{tenant.bookingType === 'queue' ? 'Ordem de chegada' : 'Horário marcado'}</span>
@@ -1867,6 +1884,20 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
              )}
 
             <div className="admin-content-scroll">
+              {!notifsEnabled && (
+                <section className="notification-opt-in notification-opt-in--admin" aria-label="Ativar notificações">
+                  <span className="notification-opt-in__icon" aria-hidden="true">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                  </span>
+                  <span className="notification-opt-in__copy">
+                    <strong>Receba avisos de novos clientes</strong>
+                    <small>Ative neste aparelho para ser avisado mesmo com o painel fechado.</small>
+                  </span>
+                  <button type="button" onClick={() => void enableNotifications()} disabled={notifsEnabling}>
+                    {notifsEnabling ? 'Ativando…' : 'Ativar notificações'}
+                  </button>
+                </section>
+              )}
 
               {activeTab === 'financial' ? (
                 <div className="admin-module fade-in"><FinancialView tenantId={tenant.id} /></div>
@@ -2745,7 +2776,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         </div>
       ) : (
         /* CLIENT VIEW */
-        <div className="app-container customer-app fade-in" style={customerThemeStyle}>
+        <div className="app-container customer-app" style={customerThemeStyle}>
           <header className="customer-topbar">
             <div className="customer-platform-brand">
               <BrandMark className="customer-platform-mark" />
@@ -2831,6 +2862,21 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
               </div>
             </div>
           </section>
+
+          {!notifsEnabled && (
+            <section className="notification-opt-in notification-opt-in--customer" aria-label="Ativar notificações">
+              <span className="notification-opt-in__icon" aria-hidden="true">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+              </span>
+              <span className="notification-opt-in__copy">
+                <strong>Não perca sua vez</strong>
+                <small>Ative os avisos para receber a chamada do profissional neste celular.</small>
+              </span>
+              <button type="button" onClick={() => void enableNotifications()} disabled={notifsEnabling}>
+                {notifsEnabling ? 'Ativando…' : 'Ativar notificações'}
+              </button>
+            </section>
+          )}
 
           {/* Client Content */}
           <div className="status-summary-container customer-status-grid fade-in">
@@ -3393,7 +3439,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
               <button 
                 onClick={async () => {
                   setShowJoinConfirmation(false);
-                  const pushId = import.meta.env.PROD ? await requestNotificationPermission() : null;
+                  const pushId = import.meta.env.PROD ? await enableNotifications() : null;
                   await confirmJoinQueue(pushId);
                 }} 
                 className="btn-submit"

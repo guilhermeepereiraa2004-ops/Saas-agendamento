@@ -659,6 +659,46 @@ button, input, select { font-family: inherit; }
   color: #087a55;
 }
 
+.notification-opt-in {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: .9rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, rgba(0, 0, 0, .1));
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--accent-primary) 8%, #fff);
+  color: var(--text-primary);
+  box-shadow: 0 12px 30px rgba(18, 33, 27, .08);
+}
+.notification-opt-in--customer { margin: 0 0 1.25rem; }
+.notification-opt-in--admin { margin: 0 0 1rem; }
+.notification-opt-in__icon {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: var(--accent-primary);
+  color: var(--customer-on-accent, #fff);
+}
+.notification-opt-in__copy { min-width: 0; display: flex; flex-direction: column; gap: .2rem; }
+.notification-opt-in__copy strong { font-size: .95rem; }
+.notification-opt-in__copy small { color: var(--text-secondary); font-size: .8rem; line-height: 1.4; }
+.notification-opt-in > button {
+  min-height: 42px;
+  padding: .65rem 1rem;
+  border: 0;
+  border-radius: 12px;
+  background: var(--accent-primary);
+  color: var(--customer-on-accent, #fff);
+  font: inherit;
+  font-size: .8rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.notification-opt-in > button:disabled { opacity: .65; cursor: wait; }
+
 @media (max-width: 640px) {
   .customer-app { font-size: 16px; }
   .customer-app .customer-hero .hero-title { font-size: clamp(2.4rem, 12vw, 3.25rem); letter-spacing: -.04em; }
@@ -678,6 +718,8 @@ button, input, select { font-family: inherit; }
   .appointment-time-slot { min-height: 43px; font-size: .86rem; }
   .appointment-selection-summary { grid-template-columns: auto minmax(0, 1fr); }
   .appointment-selection-summary b { grid-column: 2; }
+  .notification-opt-in { grid-template-columns: auto minmax(0, 1fr); padding: .9rem; }
+  .notification-opt-in > button { grid-column: 1 / -1; width: 100%; }
 }
 
 @media (max-width: 980px) {

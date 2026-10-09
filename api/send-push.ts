@@ -42,6 +42,17 @@ const allowedEvents = new Set<PushEventName>([
 
 const rateBuckets = new Map<string, { count: number; resetAt: number }>();
 
+function normalizeOrigin(value: string | undefined): string | null {
+  const raw = value?.trim().replace(/\/$/, '');
+  if (!raw) return null;
+
+  try {
+    return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).origin;
+  } catch {
+    return null;
+  }
+}
+
 function json(data: unknown, status = 200) {
   return Response.json(data, {
     status,
@@ -57,7 +68,7 @@ function isSameOriginRequest(request: Request) {
   if (!origin) return false;
 
   const requestOrigin = new URL(request.url).origin;
-  const configuredOrigin = process.env.APP_ORIGIN?.trim().replace(/\/$/, '');
+  const configuredOrigin = normalizeOrigin(process.env.APP_ORIGIN);
   const allowedOrigin = origin === requestOrigin || origin === configuredOrigin;
   const fetchSite = request.headers.get('sec-fetch-site');
   return allowedOrigin && (!fetchSite || fetchSite === 'same-origin' || fetchSite === 'same-site');
@@ -184,7 +195,9 @@ export default {
       const restApiKey = (process.env.ONESIGNAL_REST_API_KEY || process.env.VITE_ONESIGNAL_REST_API_KEY)?.trim();
       if (!appId || !restApiKey) return json({ error: 'Push provider is not configured' }, 503);
 
-      const appOrigin = process.env.APP_ORIGIN?.trim().replace(/\/$/, '') || new URL(request.url).origin;
+      // APP_ORIGIN was historically configured without the protocol in this project.
+      // OneSignal rejects web_url unless it starts with http:// or https://.
+      const appOrigin = normalizeOrigin(process.env.APP_ORIGIN) || new URL(request.url).origin;
       const destinationUrl = `${appOrigin}/${tenant.slug}`;
       const targetIdentity = 'subscriptionId' in eventMessage.target
         ? eventMessage.target.subscriptionId
