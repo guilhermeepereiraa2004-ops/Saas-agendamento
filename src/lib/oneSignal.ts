@@ -27,7 +27,9 @@ interface ForegroundNotificationEvent {
     title?: string;
     body?: string;
     launchURL?: string;
+    display?: () => void;
   };
+  preventDefault?: () => void;
 }
 
 interface OneSignalSubscription {
@@ -151,6 +153,10 @@ export function initializeOneSignal() {
         oneSignal.User.PushSubscription.addEventListener('change', updateState);
         oneSignal.Notifications.addEventListener('foregroundWillDisplay', event => {
           const notification = event.notification || {};
+          const canControlNativeDisplay = typeof event.preventDefault === 'function'
+            && typeof notification.display === 'function';
+          if (canControlNativeDisplay) event.preventDefault?.();
+
           playNotificationSound();
           window.dispatchEvent(new CustomEvent('suavez:notification', {
             detail: {
@@ -159,6 +165,8 @@ export function initializeOneSignal() {
               url: notification.launchURL || window.location.href,
             },
           }));
+
+          if (canControlNativeDisplay) notification.display?.();
         });
       }
 
