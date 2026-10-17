@@ -1,0 +1,7 @@
+.env*
+scratch/
+scripts/
+supabase/
+node_modules/
+dist/
+*.log

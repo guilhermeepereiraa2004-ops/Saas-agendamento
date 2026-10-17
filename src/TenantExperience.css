@@ -1,0 +1,208 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap');
+
+/* Customer and sign-in surfaces share one restrained, accessible tenant palette. */
+.tenant-experience { min-height: 100dvh; background: #f6f5f2; font-family: 'Poppins', sans-serif; }
+.tenant-experience > .modal-overlay .btn-submit:not([style]) { color: var(--customer-on-accent) !important; }
+.customer-app,
+.tenant-login {
+  --font-heading: 'Poppins', sans-serif;
+  --font-body: 'Poppins', sans-serif;
+  --customer-font-display: 'Poppins', sans-serif;
+  --customer-font-ui: 'Poppins', sans-serif;
+  --customer-canvas: #f6f5f2;
+  --customer-surface: #ffffff;
+  --customer-soft: color-mix(in srgb, var(--customer-accent) 5%, #fafaf8);
+  --customer-soft-strong: color-mix(in srgb, var(--customer-accent) 10%, #ffffff);
+  --customer-ink: #24262b;
+  --customer-muted: #656970;
+  --customer-border: #e5e5e1;
+  --customer-deep: color-mix(in srgb, var(--customer-accent) 10%, #25272d);
+  --customer-deeper: #1d1f24;
+  --text-primary: var(--customer-ink);
+  --text-secondary: var(--customer-muted);
+  --success: #16815d;
+  font-family: 'Poppins', sans-serif;
+  color: var(--customer-ink);
+}
+
+.customer-app { max-width: 1240px; padding: 1rem clamp(1rem, 4vw, 3rem) 2rem; }
+.customer-app::before { background: var(--customer-canvas); }
+.customer-topbar { margin-bottom: 1.25rem; }
+.customer-app .customer-platform-mark { background: #292c30; box-shadow: none; }
+.customer-app .customer-platform-mark circle { fill: #fff; }
+.customer-app .customer-platform-mark path { stroke: #fff; }
+.customer-app .customer-platform-brand span { font-size: .65rem; }
+.customer-app .btn-role { min-height: 44px; padding: .6rem .95rem; font-size: .75rem; letter-spacing: 0; text-transform: none; background: #fff; }
+
+.customer-app .customer-hero {
+  min-height: 280px;
+  padding: clamp(1.5rem, 3.5vw, 2.75rem);
+  border: 1px solid var(--customer-border);
+  border-radius: 24px;
+  background: var(--customer-surface);
+  color: var(--customer-ink);
+  box-shadow: 0 4px 24px #24262b04;
+}
+.customer-app .customer-hero:hover { box-shadow: 0 4px 24px #24262b04; }
+.customer-app .customer-hero-pattern::before { border-color: var(--customer-border); box-shadow: 0 0 0 44px #24262b02, 0 0 0 88px #24262b01; }
+.customer-app .customer-hero-pattern::after { display: none; }
+.customer-hero .hero-content { grid-template-columns: minmax(0, 1fr) minmax(275px, 310px); gap: 2.5rem; }
+.customer-hero .hero-brand { gap: 1.4rem; }
+.customer-app .customer-hero .hero-logo-container,
+.customer-app .customer-hero .hero-logo-container.has-profession-icon { width: 88px; height: 88px; flex: 0 0 88px; border-radius: 22px; border: 1px solid var(--customer-border); background: #fff; box-shadow: 0 5px 16px #24262b06; }
+.customer-app .customer-hero .hero-logo-icon { width: 66px; height: 66px; border-radius: 16px; background: var(--customer-soft); color: var(--customer-accent); box-shadow: none; }
+.customer-hero .hero-logo-img { border-radius: 21px; object-fit: contain; }
+.customer-app .customer-hero-kicker { margin-bottom: .65rem; color: var(--customer-accent); font-size: .68rem; font-weight: 700; letter-spacing: .1em; }
+.customer-app .customer-hero-kicker::before { background: var(--tenant-brand); box-shadow: none; }
+.customer-app .customer-hero .hero-title { margin-bottom: .85rem; color: var(--customer-ink); font-size: clamp(2rem, 4vw, 3.3rem); line-height: 1.1; letter-spacing: -.055em; overflow-wrap: anywhere; }
+.customer-app .customer-hero .hero-subtitle { max-width: 38ch; color: var(--customer-muted); font-size: .96rem; line-height: 1.65; font-weight: 400; }
+.customer-app .customer-hero .client-hero-actions { padding: 1.15rem; border: 1px solid var(--customer-border); border-radius: 18px; background: #fafaf8; backdrop-filter: none; box-shadow: none; }
+.customer-app .customer-hero-promise { gap: .65rem; }
+.customer-app .customer-promise-icon { width: 36px; height: 36px; flex-basis: 36px; border-radius: 11px; color: var(--customer-accent); background: var(--customer-soft-strong); }
+.customer-app .customer-hero-promise strong { color: var(--customer-ink); font-size: .85rem; }
+.customer-app .customer-hero-promise small { color: var(--customer-muted); font-size: .76rem; }
+.customer-app .customer-hero .hero-online-badge { align-self: flex-start; padding: .4rem .6rem; border: 0; background: #eaf5ef; color: #216347; font-size: .64rem; font-weight: 700; letter-spacing: .03em; }
+.customer-app .hero-online-badge.online .pulse-dot { background: #21805a; box-shadow: none; animation: none; }
+.customer-app .hero-online-badge.offline { background: #f1f1ee; color: #62666d; }
+.customer-app .hero-online-badge.offline .pulse-dot { background: #74777c; box-shadow: none; animation: none; }
+.customer-app .customer-hero .hero-cta-button,
+.customer-app .customer-submit-button { gap: .75rem; background: var(--customer-accent); box-shadow: none; border: 0; border-radius: 12px; }
+.customer-app .customer-hero .hero-cta-button:hover,
+.customer-app .customer-submit-button:not(:disabled):hover,
+.customer-app .mobile-join-cta:hover { background: var(--customer-deep); color: #fff !important; transform: none; box-shadow: none; }
+.customer-store-button { min-height: 44px; border-color: var(--customer-border); color: var(--customer-ink); font-size: .8rem; }
+
+.customer-app .customer-status-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin: 1rem 0 1.5rem; }
+.customer-app .customer-status-grid .status-summary-card { min-height: 96px; padding: 1rem 1.25rem; border: 1px solid var(--customer-border); border-radius: 16px; background: #fff; box-shadow: none; backdrop-filter: none; }
+.customer-app .customer-status-grid .status-summary-card::after { display: none; }
+.customer-status-copy { gap: .3rem; }
+.customer-app .customer-status-eyebrow { font-size: .65rem; font-weight: 500; letter-spacing: .02em; text-transform: none; }
+.customer-app .customer-status-copy .status-value { font-size: 1.75rem; }
+.customer-app .customer-status-copy .status-label { font-size: .78rem; }
+.customer-app .customer-status-icon,
+.customer-app .customer-status-grid .waiting .customer-status-icon { width: 40px; height: 40px; flex-basis: 40px; border-radius: 12px; background: #f6f6f3; color: var(--customer-muted); }
+.customer-app .customer-main-content { gap: 1.25rem; margin-bottom: 1rem; }
+.customer-app .customer-form-panel,
+.customer-app .customer-queue-panel { border-color: var(--customer-border); border-radius: 20px; background: #fff; box-shadow: none; }
+.customer-app .customer-queue-panel { min-height: 0; }
+.customer-app .customer-form-heading h2 { font-size: 1.4rem; }
+.customer-app .customer-section-kicker { font-size: .65rem; letter-spacing: .08em; }
+.customer-app .customer-form-panel input,
+.customer-app .customer-form-panel select,
+.customer-app .customer-form-panel .selector-trigger { background: #fafaf8 !important; border-radius: 12px !important; }
+.customer-app .customer-form-panel input:focus,
+.customer-app .customer-form-panel select:focus,
+.customer-app .customer-form-panel .selector-trigger:focus { box-shadow: 0 0 0 3px var(--customer-soft-strong) !important; }
+.customer-app .customer-queue-panel .queue-header h2 { font-size: 1.6rem; }
+.customer-app .customer-queue-panel .queue-header p { font-size: .88rem !important; }
+.customer-app .customer-empty-state { min-height: 260px; padding: 2rem 1.25rem !important; border: 1px solid #ededea !important; border-radius: 16px !important; background: #fafaf8 !important; }
+.customer-app .customer-empty-icon { width: 56px; height: 56px; margin-bottom: 1rem; border-radius: 18px; color: var(--customer-accent); background: var(--customer-soft-strong); box-shadow: none; }
+.customer-app .customer-empty-icon svg { stroke: currentColor; }
+.customer-app .customer-empty-kicker { color: var(--customer-muted); font-size: .62rem; letter-spacing: .065em; }
+.customer-app .customer-empty-state h3 { font-size: 1.25rem; letter-spacing: -.035em; }
+.customer-app .customer-empty-state p { font-size: .86rem !important; line-height: 1.65 !important; }
+.customer-app .customer-empty-cta { background: #fff; border-color: var(--customer-border); color: var(--customer-accent); border-radius: 10px; font-size: .8rem; }
+.customer-app .customer-empty-cta:hover { color: #fff; background: var(--customer-accent); transform: none; box-shadow: none; }
+.customer-app .customer-queue-time,
+.customer-app .customer-queue-duration,
+.customer-app .svc-price { color: var(--customer-accent); }
+.customer-app .status-badge.serving,
+.customer-app .status-badge.ready { color: #216347; background: #eaf5ef; border-color: #cee4d8; }
+.customer-app .notification-opt-in--customer { margin: 1rem 0; background: #fff; border-color: var(--customer-border); box-shadow: none; }
+.customer-app .notification-opt-in__icon { background: var(--customer-soft-strong); color: var(--customer-accent); }
+.customer-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .5rem; padding: 1rem .25rem; color: var(--customer-muted); font-size: .75rem; }
+.customer-footer span { color: #777a80; }
+.customer-app :is(button, a, input, select):focus-visible,
+.tenant-login :is(button, a, input):focus-visible { outline: 2px solid var(--customer-accent); outline-offset: 4px; }
+.customer-app button { cursor: pointer; touch-action: manipulation; }
+
+/* The overlay receives the same variables as the public page, not global brand defaults. */
+.login-page-overlay.tenant-login { align-items: flex-start; padding: max(1.5rem, env(safe-area-inset-top)) 1.25rem; background: radial-gradient(ellipse at 50% 0, color-mix(in srgb, var(--customer-accent) 10%, transparent), transparent 60%), var(--customer-canvas) !important; }
+.tenant-login .login-page-container { max-width: 440px; gap: 1.25rem; }
+.tenant-login .login-back-button { min-height: 44px; padding: 0; border: 0; color: var(--customer-muted); font-family: inherit; font-size: .85rem; }
+.tenant-login .login-card { position: relative; overflow: hidden; padding: 2.5rem; border: 1px solid var(--customer-border) !important; border-radius: 24px !important; background: #fff !important; box-shadow: 0 16px 60px #24262b08 !important; }
+.tenant-login .login-card::before { content: ''; position: absolute; inset: 0 0 auto; height: 4px; background: var(--tenant-brand); }
+.tenant-login .login-header { margin-bottom: 2rem; text-align: left; }
+.tenant-login .login-logo,
+.tenant-login .login-logo.has-profession-icon { width: 64px; height: 64px; margin: 0 0 1.25rem; background: var(--customer-soft-strong); color: var(--customer-accent); border: 1px solid var(--customer-border); border-radius: 18px; box-shadow: none; }
+.tenant-login .login-logo img { object-fit: contain; border-radius: 17px; }
+.tenant-login-name { display: block; margin-bottom: .6rem; color: var(--customer-accent); font-size: .8rem; font-weight: 700; overflow-wrap: anywhere; }
+.tenant-login .login-header h2 { color: var(--customer-ink); font-family: var(--font-heading); font-size: 1.9rem; line-height: 1.2; font-weight: 800; letter-spacing: -.05em; }
+.tenant-login .login-header p { margin-top: .75rem; color: var(--customer-muted); font-size: .9rem; line-height: 1.6; }
+.tenant-login .login-form { gap: 1.25rem; }
+.tenant-login .form-group { margin: 0; }
+.tenant-login .form-group label { display: block; margin-bottom: .5rem; color: var(--customer-ink); font-size: .85rem; font-weight: 600; text-transform: none; letter-spacing: 0; }
+.tenant-login .input-with-icon input { min-height: 54px; background: #fafaf8 !important; border-color: var(--customer-border) !important; font-family: inherit; }
+.tenant-login .input-with-icon input:focus { border-color: var(--customer-accent) !important; box-shadow: 0 0 0 3px var(--customer-soft-strong) !important; }
+.tenant-login .password-input-shell input { padding-right: 56px !important; }
+.tenant-login .password-toggle { position: absolute; right: 5px; width: 44px; height: 44px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 9px; color: var(--customer-muted); background: transparent; cursor: pointer; }
+.tenant-login .password-toggle svg { position: static; color: currentColor; }
+.tenant-login .login-btn { min-height: 54px; margin-top: .5rem; border: 0; border-radius: 12px; color: var(--customer-on-accent) !important; background: var(--customer-accent); box-shadow: none; font-size: .9rem; font-family: inherit; font-weight: 700; text-transform: none; letter-spacing: 0; }
+.tenant-login .login-btn:hover { background: var(--customer-deep); color: #fff !important; transform: none; }
+.tenant-login .login-footer { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--customer-border); }
+.tenant-login .login-footer p { color: var(--customer-muted); font-size: .78rem; }
+.professional-admin .admin-brand-preview-stage { background: #fff; color: #24262b; border: 1px solid #e5e5e1; }
+.professional-admin .admin-brand-preview-mark { background: color-mix(in srgb, var(--customer-accent) 8%, white); color: var(--customer-accent); }
+.professional-admin .admin-brand-preview-stage button { background: var(--customer-accent); }
+
+@media (max-width: 980px) {
+  .customer-hero .hero-content { grid-template-columns: minmax(0, 1fr); gap: 1.25rem; }
+  .customer-app .customer-hero .hero-brand { display: grid; grid-template-columns: 64px minmax(0, 1fr); column-gap: 1rem; row-gap: .25rem; text-align: left; }
+  .customer-hero .hero-text { display: contents; }
+  .customer-app .customer-hero .hero-logo-container,
+  .customer-app .customer-hero .hero-logo-container.has-profession-icon { grid-column: 1; grid-row: 1 / 3; width: 64px; height: 64px; min-width: 0; align-self: start; border-radius: 18px; }
+  .customer-app .customer-hero .hero-logo-icon { width: 48px; height: 48px; border-radius: 13px; }
+  .customer-hero .profession-icon--hero { width: 38px; height: 38px; }
+  .customer-app .customer-hero-kicker { grid-column: 2; grid-row: 1; align-self: end; margin: 0 0 .25rem; font-size: .62rem; }
+  .customer-app .customer-hero .hero-title { grid-column: 2; grid-row: 2; align-self: start; margin: 0; font-size: clamp(1.65rem, 6vw, 2.6rem); letter-spacing: -.045em; }
+  .customer-app .customer-hero .hero-subtitle { grid-column: 1 / -1; grid-row: 3; max-width: 42ch; margin: .85rem 0 0; font-size: .9rem; line-height: 1.6; }
+  .customer-app .customer-hero .client-hero-actions { display: flex; flex-direction: row; justify-content: space-between; align-items: center; gap: .5rem; max-width: none; padding: 0; border: 0; background: transparent; }
+  .customer-app .customer-hero-promise,
+  .customer-app .customer-hero .hero-cta-button,
+  .customer-app .customer-empty-cta { display: none; }
+  .customer-app .customer-hero .hero-online-badge { margin: 0; align-self: center; }
+  .customer-store-button { min-height: 44px; padding: .5rem .65rem; }
+  .customer-app .customer-status-grid { gap: .65rem; margin: .75rem 0 1.25rem; }
+  .customer-app .customer-status-grid .status-summary-card { min-height: 88px; padding: .8rem 1rem; border-radius: 14px; }
+  .customer-status-copy .status-info { flex-direction: row; align-items: baseline; gap: .4rem; }
+  .customer-app .customer-status-icon { display: none; }
+  .customer-app .customer-form-panel.has-active-presence { order: 0; }
+  .customer-app .mobile-join-cta-wrap { position: fixed; z-index: 20; inset: auto 0 0; display: flex; flex-direction: column; gap: .55rem; margin: 0; padding: .8rem max(1.25rem, calc((100vw - 700px) / 2)) max(.85rem, env(safe-area-inset-bottom)); border-top: 1px solid var(--customer-border); background: #fffffff5; backdrop-filter: blur(16px); box-shadow: 0 -4px 24px #24262b05; }
+  .mobile-join-context { display: flex; align-items: center; justify-content: center; gap: .45rem; color: var(--customer-muted); font-size: .72rem; }
+  .mobile-join-dot { width: 6px; height: 6px; border-radius: 50%; background: #21805a; }
+  .customer-app .mobile-join-cta { min-height: 52px; padding: .85rem 1.15rem; border-radius: 12px; box-shadow: none; }
+  .customer-app .mobile-join-cta strong { font-size: .94rem; font-weight: 700; }
+  .customer-app { padding-bottom: calc(132px + env(safe-area-inset-bottom)); }
+  .customer-app .customer-form-panel.mobile-join-modal.is-open { inset: auto max(.5rem, calc((100vw - 560px) / 2)) 0; padding: 4rem 1.25rem max(1.5rem, env(safe-area-inset-bottom)); border-radius: 24px 24px 0 0; background: #fff; }
+  .customer-app .customer-form-panel.mobile-join-modal.is-open::before { content: ''; position: absolute; top: .7rem; left: calc(50% - 18px); width: 36px; height: 4px; border-radius: 4px; background: #dadbd7; }
+}
+
+@media (max-width: 640px) {
+  .customer-app { padding-inline: 1rem; padding-top: .4rem; }
+  .customer-topbar { min-height: 60px; margin-bottom: .65rem; gap: .75rem; }
+  .customer-app .customer-platform-brand strong { font-size: .95rem; }
+  .customer-platform-mark { width: 32px; height: 32px; flex-basis: 32px; }
+  .customer-app .btn-role { font-size: .72rem; padding: .5rem .75rem; }
+  .customer-app .customer-hero { min-height: auto; padding: 1.25rem; border-radius: 20px; }
+  .customer-app .customer-status-eyebrow { font-size: .64rem; }
+  .customer-app .customer-status-copy .status-label { font-size: .7rem; }
+  .customer-app .customer-status-copy .status-value { font-size: 1.5rem; }
+  .customer-app .customer-form-panel,
+  .customer-app .customer-queue-panel { padding: 1.15rem; border-radius: 18px; }
+  .customer-app .customer-queue-header { margin-bottom: 1rem !important; }
+  .customer-app .customer-queue-panel .queue-header h2 { font-size: 1.4rem; }
+  .customer-app .customer-queue-panel .queue-header p { font-size: .82rem !important; }
+  .customer-app .customer-empty-state { min-height: 240px; padding: 1.5rem 1rem !important; }
+  .customer-app .customer-empty-state h3 { font-size: 1.15rem; }
+  .customer-app .customer-queue-time { min-width: 38px; font-size: 1rem; }
+  .customer-app .customer-queue-name { overflow-wrap: anywhere; }
+  .customer-app .queue-item { gap: .65rem !important; }
+  .customer-app .queue-item .status-badge { margin-left: auto; font-size: .6rem; }
+  .customer-footer { flex-direction: column; align-items: center; text-align: center; font-size: .7rem; }
+  .tenant-login .login-card { padding: 2rem 1.5rem; }
+  .tenant-login .login-header h2 { font-size: 1.8rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .customer-app *, .tenant-login, .tenant-login * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}

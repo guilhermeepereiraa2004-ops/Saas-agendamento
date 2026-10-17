@@ -1,4 +1,6 @@
+import { customerTokens } from './customerTokens';
 import { playNotificationSound, unlockNotificationSound } from './notificationSound';
+import { authorizationHeaders } from './access';
 
 export type PushEventName =
   | 'client_joined'
@@ -291,10 +293,11 @@ export function logoutOneSignal(): Promise<void> {
 
 export async function sendPushNotification(event: PushEventName, tenantId: string, queueItemId: string): Promise<PushSendResult> {
   try {
+    const tokens = customerTokens(tenantId);
     const response = await fetch('/api/send-push', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ event, tenantId, queueItemId }),
+      headers: { 'Content-Type': 'application/json', ...await authorizationHeaders() },
+      body: JSON.stringify({ event, tenantId, queueItemId, customerToken: tokens[queueItemId] }),
       keepalive: true,
     });
 

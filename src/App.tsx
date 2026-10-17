@@ -8,18 +8,24 @@ import { ToastProvider } from './components/ToastProvider';
 import { OneSignalInitializer } from './components/OneSignalInitializer';
 import { requestNotificationPermission } from './lib/oneSignal';
 import LandingPage, { BrandMark } from './LandingPage';
+import { getStaffAccess } from './lib/access';
+import { mapTenant } from './lib/tenantData';
 
 function App() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [currentPath] = useState(window.location.pathname);
-  const [isAdminAuth, setIsAdminAuth] = useState(localStorage.getItem('admin_auth') === 'true');
+  const [isAdminAuth, setIsAdminAuth] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [signingIn, setSigningIn] = useState(false);
   const [adminEmail, setAdminEmail] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
 
   useEffect(() => {
     const fetchTenants = async () => {
-      const { data, error } = await supabase.from('tenants').select('*');
+      const slug = currentPath.slice(1);
+      if (!slug || slug === 'admin') { setIsLoading(false); return; }
+      const { data, error } = await supabase.rpc('get_public_tenant', { p_slug: slug });
 
       if (error) {
         console.error('Erro ao buscar estabelecimentos:', error);
@@ -28,44 +34,36 @@ function App() {
       }
       
       if (data && data.length > 0) {
-        const mappedTenants: Tenant[] = data.map(t => ({
-          id: t.id,
-          name: t.name,
-          slug: t.slug,
-          whatsapp: t.whatsapp,
-          primaryColor: t.primary_color,
-          hasLogo: t.has_logo,
-          logoUrl: t.logo_url,
-          loginEmail: t.login_email,
-          loginPassword: t.login_password,
-          services: typeof t.services === 'string' ? JSON.parse(t.services) : t.services,
-          profession: t.profession,
-          isOnline: t.is_online ?? true,
-          bookingType: t.booking_type || 'queue',
-          workingHours: typeof t.working_hours === 'string' ? JSON.parse(t.working_hours) : (t.working_hours || []),
-          subscriptionStatus: t.subscription_status || 'trial',
-          paymentDay: t.payment_day || 10,
-          secondaryColor: t.secondary_color || '#ffffff',
-          isActive: t.is_active !== false,
-        }));
+        const mappedTenants: Tenant[] = data.map(mapTenant);
         setTenants(mappedTenants);
       }
       setIsLoading(false);
     };
 
     fetchTenants();
-  }, []);
+  }, [currentPath]);
+
+  useEffect(() => {
+    if (currentPath !== '/admin') return;
+    let live = true;
+    const refresh = async () => { const access = await getStaffAccess(); if (live) setIsAdminAuth(Boolean(access?.is_master)); };
+    void refresh();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(() => { setTimeout(() => { if (live) void refresh(); }, 0); });
+    return () => { live = false; subscription.unsubscribe(); };
+  }, [currentPath]);
 
   const handleAdminLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (adminEmail === 'gestaomulti@gmail.com' && adminPassword === 'naoseinao') {
-      setIsAdminAuth(true);
-      localStorage.setItem('admin_auth', 'true');
-      
-      await requestNotificationPermission();
-    } else {
-      alert('Credenciais administrativas inválidas!');
-    }
+    if (signingIn) return;
+    setSigningIn(true); setAuthError('');
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email: adminEmail.trim(), password: adminPassword });
+      if (error) { setAuthError('E-mail ou senha inválidos.'); return; }
+      const access = await getStaffAccess();
+      if (!access?.is_master) { await supabase.auth.signOut({ scope: 'local' }); setAuthError('Esta conta não possui acesso administrativo.'); return; }
+      setAdminPassword(''); setIsAdminAuth(true);
+      void requestNotificationPermission();
+    } finally { setSigningIn(false); }
   };
 
   if (isLoading) {
@@ -86,20 +84,24 @@ function App() {
               
               <form onSubmit={handleAdminLogin} style={{ textAlign: 'left' }}>
                 <div className="form-group" style={{ marginBottom: '1.5rem' }}>
-                  <label style={{ display: 'block', color: '#000000', fontSize: '0.8rem', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 600 }}>E-mail Master</label>
+                  <label htmlFor="master-email" style={{ display: 'block', color: '#000000', fontSize: '0.8rem', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 600 }}>E-mail Master</label>
                   <input 
                     type="email" 
+                    id="master-email"
                     value={adminEmail} 
                     onChange={(e) => setAdminEmail(e.target.value)} 
                     style={{ width: '100%', padding: '12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', color: '#000000' }}
-                    placeholder="gestaomulti@gmail.com"
+                    placeholder="seu@email.com"
+                    autoComplete="username"
                     required 
                   />
                 </div>
                 <div className="form-group" style={{ marginBottom: '2rem' }}>
-                  <label style={{ display: 'block', color: '#000000', fontSize: '0.8rem', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 600 }}>Senha</label>
+                  <label htmlFor="master-password" style={{ display: 'block', color: '#000000', fontSize: '0.8rem', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 600 }}>Senha</label>
                   <input 
                     type="password" 
+                    id="master-password"
+                    autoComplete="current-password"
                     value={adminPassword} 
                     onChange={(e) => setAdminPassword(e.target.value)} 
                     style={{ width: '100%', padding: '12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', color: '#000000' }}
@@ -107,8 +109,9 @@ function App() {
                     required 
                   />
                 </div>
-                <button type="submit" className="btn-submit" style={{ width: '100%', padding: '14px', borderRadius: '8px', background: '#10b981', border: 'none', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>
-                  Acessar Plataforma
+                {authError && <p role="alert" style={{ color: '#b91c1c', marginBottom: '1rem' }}>{authError}</p>}
+                <button type="submit" disabled={signingIn} className="btn-submit" style={{ width: '100%', padding: '14px', borderRadius: '8px', background: '#10b981', border: 'none', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>
+                  {signingIn ? 'Entrando…' : 'Acessar Plataforma'}
                 </button>
                 <a href="/" style={{ display: 'block', textAlign: 'center', marginTop: '1.5rem', color: '#a1a1aa', fontSize: '0.8rem', textDecoration: 'none' }}>Voltar para Home</a>
               </form>

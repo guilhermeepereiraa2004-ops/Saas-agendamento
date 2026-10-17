@@ -3,14 +3,17 @@ import './App.css';
 import type { QueueItem, Tenant, TenantTask, TenantProduct, Service } from './types';
 import { supabase } from './lib/supabase';
 import FinancialView from './FinancialView';
-import { getProfessionConfig } from './lib/professionConfig';
 import { useToasts } from './lib/toast';
 import { requestNotificationPermission, getOneSignalId, sendPushNotification, isNotificationEnabled, loginOneSignal, logoutOneSignal } from './lib/oneSignal';
 import { playNotificationSound } from './lib/notificationSound';
 import { BrandMark } from './LandingPage';
 import { ProfessionIcon } from './components/ProfessionIcon';
+import { getTenantTheme, getReadableAccentText, hexToRgbString } from './lib/tenantTheme';
+import { canManageTenant } from './lib/access';
+import { customerTokens } from './lib/customerTokens';
+import { mapTenant, TENANT_FIELDS } from './lib/tenantData';
+import { validWorkingHours, formatCalendarDate } from './lib/validation';
 
-type RgbColor = [number, number, number];
 type AdminTab = 'atendimento' | 'agenda' | 'financial' | 'tasks' | 'store' | 'services' | 'scheduling' | 'settings';
 type WorkingHours = NonNullable<Tenant['workingHours']>;
 
@@ -90,51 +93,6 @@ const ADMIN_TAB_META: Record<AdminTab, { eyebrow: string; title: string; descrip
   },
 };
 
-function parseHexColor(value: string): RgbColor | null {
-  const normalized = value.trim().replace('#', '');
-  const expanded = normalized.length === 3
-    ? normalized.split('').map(char => char + char).join('')
-    : normalized;
-
-  if (!/^[\da-f]{6}$/i.test(expanded)) return null;
-
-  return [
-    parseInt(expanded.slice(0, 2), 16),
-    parseInt(expanded.slice(2, 4), 16),
-    parseInt(expanded.slice(4, 6), 16),
-  ];
-}
-
-function relativeLuminance([red, green, blue]: RgbColor) {
-  const channels = [red, green, blue].map(channel => {
-    const value = channel / 255;
-    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-  });
-
-  return (0.2126 * channels[0]) + (0.7152 * channels[1]) + (0.0722 * channels[2]);
-}
-
-function contrastRatio(first: RgbColor, second: RgbColor) {
-  const lighter = Math.max(relativeLuminance(first), relativeLuminance(second));
-  const darker = Math.min(relativeLuminance(first), relativeLuminance(second));
-  return (lighter + 0.05) / (darker + 0.05);
-}
-
-function getReadableAccentText(background: string, preferred: string) {
-  const backgroundRgb = parseHexColor(background) || [16, 18, 24] as RgbColor;
-  const preferredRgb = parseHexColor(preferred);
-
-  if (preferredRgb && contrastRatio(backgroundRgb, preferredRgb) >= 4.5) return preferred;
-
-  const white: RgbColor = [255, 255, 255];
-  const ink: RgbColor = [17, 19, 24];
-  return contrastRatio(backgroundRgb, white) >= contrastRatio(backgroundRgb, ink) ? '#ffffff' : '#111318';
-}
-
-function hexToRgbString(value: string) {
-  return (parseHexColor(value) || [212, 175, 55]).join(', ');
-}
-
 function parseMoneyInput(value: string) {
   const normalized = value.trim().replace(/\s/g, '').replace(/\.(?=\d{3}(?:\D|$))/g, '').replace(',', '.');
   const amount = Number(normalized);
@@ -181,6 +139,7 @@ function AdminNavIcon({ tab }: { tab: AdminTab }) {
 }
 
 export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant }) {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [tenant, setTenant] = useState<Tenant>(initialTenant);
   const { showToast } = useToasts();
   const [queue, setQueue] = useState<QueueItem[]>([]);
@@ -212,23 +171,23 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     dayEnd.setDate(dayEnd.getDate() + 1);
 
     const [queueResponse, tenantResponse, completedResponse, settingsResponse] = await Promise.all([
-      supabase
+      isAuthenticated ? supabase
         .from('queue_items')
         .select('*')
         .eq('tenant_id', tenant.id)
-        .order('joined_at', { ascending: true }),
-      supabase
+        .order('joined_at', { ascending: true }) : supabase.rpc('get_public_queue', { p_tenant_id: tenant.id, p_tokens: customerTokens(tenant.id) }),
+      isAuthenticated ? supabase
         .from('tenants')
-        .select('*')
+        .select(TENANT_FIELDS)
         .eq('id', tenant.id)
-        .single(),
-      supabase
+        .single() : supabase.rpc('get_public_tenant', { p_slug: tenant.slug }).then(result => ({ ...result, data: result.data?.[0] })),
+      isAuthenticated ? supabase
         .from('financial_records')
         .select('id', { count: 'exact', head: true })
         .eq('tenant_id', tenant.id)
         .gte('completed_at', dayStart.toISOString())
-        .lt('completed_at', dayEnd.toISOString()),
-      supabase.from('platform_settings').select('pix_key, pix_name').limit(1).single(),
+        .lt('completed_at', dayEnd.toISOString()) : Promise.resolve({ count: 0 }),
+      isAuthenticated ? supabase.from('platform_settings').select('pix_key, pix_name').limit(1).single() : Promise.resolve({ data: null }),
     ]);
 
     const queueData = queueResponse.data;
@@ -240,6 +199,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     if (tenantData) {
       setTenant(prev => ({
         ...prev,
+        ...mapTenant(tenantData),
         profession: tenantData.profession,
         name: tenantData.name,
         primaryColor: tenantData.primary_color,
@@ -265,11 +225,16 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       if (settingsData.pix_key) setAdminPixKey(settingsData.pix_key);
       if (settingsData.pix_name) setAdminPixName(settingsData.pix_name);
     }
-  }, [tenant.id, mapQueueItem]);
+  }, [tenant.id, tenant.slug, isAuthenticated, mapQueueItem]);
 
   // INITIAL LOAD + REALTIME
   useEffect(() => {
     fetchData();
+
+    if (!isAuthenticated) {
+      const interval = setInterval(fetchData, 5000);
+      return () => clearInterval(interval);
+    }
 
     // Canal separado para queue_items
     const queueChannel = supabase
@@ -348,7 +313,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       supabase.removeChannel(tenantChannel);
       clearInterval(pollInterval);
     };
-  }, [tenant.id, fetchData, mapQueueItem]);
+  }, [tenant.id, fetchData, mapQueueItem, isAuthenticated]);
 
 
   // Handle service extraction since we now deal with objects
@@ -369,10 +334,16 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   // O serviço não é mais selecionado automaticamente para evitar mal entendidos
 
   // Auth state specifics to this tenant
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
+  const loginInFlight = useRef(false);
+  const completionInFlight = useRef(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showLogin, setShowLogin] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const loginDialogRef = useRef<HTMLDivElement>(null);
+  const customerFormRef = useRef<HTMLElement>(null);
+  const joinConfirmationRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<AdminTab>('atendimento');
   const [tasks, setTasks] = useState<TenantTask[]>([]);
   const [newTaskTitle, setNewTaskTitle] = useState('');
@@ -415,18 +386,48 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   }, []);
 
   useEffect(() => {
-    if (!showMobileJoinModal) return;
+    const mediaQuery = window.matchMedia('(max-width: 980px)');
+    const closeMobileForm = (event: MediaQueryListEvent) => {
+      if (!event.matches) setShowMobileJoinModal(false);
+    };
+    mediaQuery.addEventListener('change', closeMobileForm);
+    return () => mediaQuery.removeEventListener('change', closeMobileForm);
+  }, []);
+
+  useEffect(() => {
+    if (!showMobileJoinModal && !showLogin && !showJoinConfirmation) return;
     const previousOverflow = document.body.style.overflow;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const dialog = showJoinConfirmation ? joinConfirmationRef.current : showLogin ? loginDialogRef.current : customerFormRef.current;
     document.body.style.overflow = 'hidden';
+    const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href], [tabindex="0"]') || [])
+      .filter(element => element.getClientRects().length > 0);
+    const frame = requestAnimationFrame(() => {
+      (dialog?.querySelector<HTMLElement>('input') || focusable()[0])?.focus();
+    });
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setShowMobileJoinModal(false);
+      if (event.key === 'Escape') {
+        if (showJoinConfirmation) { setShowJoinConfirmation(false); return; }
+        setShowMobileJoinModal(false);
+        setShowLogin(false);
+        setShowPassword(false);
+      }
+      if (event.key === 'Tab') {
+        const elements = focusable();
+        const first = elements[0];
+        const last = elements[elements.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => {
       document.body.style.overflow = previousOverflow;
+      cancelAnimationFrame(frame);
       window.removeEventListener('keydown', closeOnEscape);
+      previousFocus?.focus();
     };
-  }, [showMobileJoinModal]);
+  }, [showMobileJoinModal, showLogin, showJoinConfirmation]);
 
   useEffect(() => {
     if (!isAdminAddModalOpen && !showServiceModal && !showAdminDeleteModal) return;
@@ -501,14 +502,14 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     }
   };
 
-  // Load stats from localStorage on mount (for persistent auth)
+  // Only a server-validated Auth session plus tenant membership unlocks the panel.
   useEffect(() => {
-    // Check auth session
-    const auth = localStorage.getItem(`suavez_auth_${tenant.slug}`);
-    if (auth === 'true') {
-      setIsAuthenticated(true);
-    }
-  }, [tenant.slug]);
+    let live = true;
+    const refresh = async () => { const allowed = await canManageTenant(tenant.id); if (live) setIsAuthenticated(allowed); };
+    void refresh();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(() => { setTimeout(() => { if (live) void refresh(); }, 0); });
+    return () => { live = false; subscription.unsubscribe(); };
+  }, [tenant.id]);
 
   const fetchTasks = useCallback(async () => {
     const { data } = await supabase
@@ -528,11 +529,11 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   }, [tenant.id]);
 
   const fetchProducts = useCallback(async () => {
-    const { data } = await supabase
+    const { data } = await (isAuthenticated ? supabase
       .from('tenant_products')
       .select('*')
       .eq('tenant_id', tenant.id)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false }) : supabase.rpc('get_public_products', { p_tenant_id: tenant.id }));
     if (data) {
       setProducts((data as ProductRow[]).map(p => ({
         id: p.id,
@@ -543,7 +544,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         createdAt: p.created_at
       })));
     }
-  }, [tenant.id]);
+  }, [tenant.id, isAuthenticated]);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -613,6 +614,10 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   };
 
   const updateWorkingHours = async (newHours: WorkingHours) => {
+    if (!validWorkingHours(newHours)) {
+      showToast('O expediente precisa ter abertura antes do fechamento.', 'warning');
+      return;
+    }
     setLoading(true);
     const { error } = await supabase
       .from('tenants')
@@ -710,10 +715,12 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
   // Compress image via Canvas before upload (max 800px, 75% quality JPEG)
   const compressImage = (file: File): Promise<Blob> => {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Não foi possível ler a imagem.'));
       reader.onload = (ev) => {
         const img = new Image();
+        img.onerror = () => reject(new Error('A imagem está corrompida ou não é suportada.'));
         img.onload = () => {
           const MAX = 800;
           let { width, height } = img;
@@ -724,8 +731,10 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
           const canvas = document.createElement('canvas');
           canvas.width = width;
           canvas.height = height;
-          canvas.getContext('2d')!.drawImage(img, 0, 0, width, height);
-          canvas.toBlob((blob) => resolve(blob!), 'image/jpeg', 0.75);
+          const context = canvas.getContext('2d');
+          if (!context) { reject(new Error('Não foi possível processar a imagem.')); return; }
+          context.drawImage(img, 0, 0, width, height);
+          canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Não foi possível processar a imagem.')), 'image/jpeg', 0.75);
         };
         img.src = ev.target!.result as string;
       };
@@ -767,11 +776,9 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     const pushId = providedId === undefined ? await getOneSignalId() : providedId;
     if (!pushId) return false;
 
-    const { error } = await supabase
-      .from('queue_items')
-      .update({ push_id: pushId })
-      .eq('tenant_id', tenant.id)
-      .in('id', myQueueItemIds);
+    const tokens = customerTokens(tenant.id);
+    const results = await Promise.all(myQueueItemIds.map(id => supabase.rpc('customer_queue_action', { p_queue_id: id, p_token: tokens[id] || '', p_action: 'subscribe', p_push_id: pushId })));
+    const error = results.find(result => result.error)?.error;
 
     if (error) {
       console.error('Não foi possível vincular as notificações aos atendimentos do cliente.', error);
@@ -967,18 +974,12 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         }
       }
 
-      const { data, error } = await supabase.from('queue_items').insert([{
-        tenant_id: tenant.id,
-        name: name.trim(),
-        whatsapp: customerWhatsapp.trim(),
-        service_id: selectedSvc.id,
-        service_name: selectedSvc.name,
-        price: selectedSvc.price,
-        status: tenant.bookingType === 'appointment' ? 'pending' : 'waiting',
-        appointment_time: tenant.bookingType === 'appointment' ? getISOWithOffset(selectedDate, selectedTimeSlot) : null,
-        push_id: pushId,
-        duration: selectedSvc.duration || 30
-      }]).select();
+      const customerToken = crypto.randomUUID() + crypto.randomUUID();
+      const { data, error } = await supabase.rpc('join_queue', {
+        p_tenant_id: tenant.id, p_name: name.trim(), p_whatsapp: customerWhatsapp.trim(), p_service_id: selectedSvc.id,
+        p_appointment_time: tenant.bookingType === 'appointment' ? getISOWithOffset(selectedDate, selectedTimeSlot) : null,
+        p_push_id: pushId, p_token: customerToken,
+      });
 
       if (error) {
         console.error('Erro ao criar atendimento:', error);
@@ -988,6 +989,9 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         setCustomerWhatsapp('');
         
         const newIds = [...myQueueItemIds, data[0].id];
+        const tokens = customerTokens(tenant.id);
+        tokens[data[0].id] = customerToken;
+        localStorage.setItem(`suavez_tokens_${tenant.id}`, JSON.stringify(tokens));
         setMyQueueItemIds(newIds);
         localStorage.setItem(`suavez_customer_ids_${tenant.id}`, JSON.stringify(newIds));
         localStorage.setItem(`suavez_in_queue_${tenant.id}`, 'true');
@@ -1056,7 +1060,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   };
 
   const handleCompleteService = async (id: string) => {
-    if (!isAuthenticated || activeQueueActionId) return;
+    if (!isAuthenticated || completionInFlight.current) return;
     
     const item = queue.find(q => q.id === id);
     if (!item) {
@@ -1064,30 +1068,21 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       return;
     }
 
+    completionInFlight.current = true;
     setActiveQueueActionId(id);
     try {
-      // Registra a receita primeiro; se a remoção falhar, desfaz o registro criado.
-      const { data: financialRecord, error: financialError } = await supabase.from('financial_records').insert([{
-        tenant_id: tenant.id,
-        price: item.price,
-      }]).select('id').single();
-
-      if (financialError || !financialRecord) {
-        showToast('Não foi possível registrar a receita. O atendimento continua aberto.', 'error');
-        return;
-      }
-
-      const { error: deleteError } = await supabase.from('queue_items').delete().eq('id', id);
-      if (deleteError) {
-        await supabase.from('financial_records').delete().eq('id', financialRecord.id);
+      const { data, error } = await supabase.rpc('complete_service', { p_tenant_id: tenant.id, p_queue_id: id });
+      if (error) {
         showToast('Não foi possível concluir o atendimento. Tente novamente.', 'error');
         return;
       }
 
       setQueue(current => current.filter(queueItem => queueItem.id !== id));
-      setCompletedCount(current => current + 1);
+      if (!data?.already_completed) setCompletedCount(current => current + 1);
+      void fetchData();
       showToast('Atendimento concluído e receita registrada.', 'success');
     } finally {
+      completionInFlight.current = false;
       setActiveQueueActionId(null);
     }
   };
@@ -1162,10 +1157,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
   const handleConfirmOnWay = async (id: string) => {
     setLoading(true);
-    const { error } = await supabase
-      .from('queue_items')
-      .update({ is_on_way: true })
-      .eq('id', id);
+    const tokens = customerTokens(tenant.id);
+    const { error } = await supabase.rpc('customer_queue_action', { p_queue_id: id, p_token: tokens[id] || '', p_action: 'on_way' });
     setLoading(false);
     
     if (error) {
@@ -1183,16 +1176,16 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     
     setLoading(true);
     try {
-      const { error } = await supabase
-        .from('queue_items')
-        .delete()
-        .eq('id', id);
+      const tokens = customerTokens(tenant.id);
+      const { error } = await supabase.rpc('customer_queue_action', { p_queue_id: id, p_token: tokens[id] || '', p_action: 'cancel' });
       
       if (error) {
         showToast('Erro ao cancelar: ' + error.message, 'error');
       } else {
         const newIds = myQueueItemIds.filter(i => i !== id);
         setMyQueueItemIds(newIds);
+        delete tokens[id];
+        localStorage.setItem(`suavez_tokens_${tenant.id}`, JSON.stringify(tokens));
         localStorage.setItem(`suavez_customer_ids_${tenant.id}`, JSON.stringify(newIds));
         showToast('Cancelado com sucesso.', 'info');
       }
@@ -1201,27 +1194,25 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       setItemForCancel(null);
     }
   };
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const validEmail = tenant.loginEmail || 'admin@suavez.com';
-    const validPassword = tenant.loginPassword || '123456';
-    
-    if (loginEmail === validEmail && loginPassword === validPassword) {
+    if (loginInFlight.current) return;
+    loginInFlight.current = true; setSigningIn(true);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email: loginEmail.trim(), password: loginPassword });
+      if (error) { showToast('E-mail ou senha incorretos!', 'error'); return; }
+      if (!await canManageTenant(tenant.id)) { await supabase.auth.signOut({ scope: 'local' }); showToast('Esta conta não tem acesso a este estabelecimento.', 'error'); return; }
       setIsAuthenticated(true);
       setShowLogin(false);
+      setLoginPassword(''); setShowPassword(false);
       showToast('Login realizado com sucesso!', 'success');
-      
-      // Persistir login para não deslogar ao atualizar
-      localStorage.setItem(`suavez_auth_${tenant.slug}`, 'true');
       
       void loginOneSignal(`admin_${tenant.id}`).then(() => requestNotificationPermission()).then(async pushId => {
         if (!pushId) return;
         const { error } = await supabase.from('tenants').update({ admin_push_id: pushId }).eq('id', tenant.id);
         if (error) showToast('Login realizado, mas as notificações não puderam ser ativadas.', 'warning');
       });
-    } else {
-      showToast('E-mail ou senha incorretos!', 'error');
-    }
+    } finally { loginInFlight.current = false; setSigningIn(false); }
   };
 
   const handleAddTask = async (e: React.FormEvent) => {
@@ -1273,13 +1264,11 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     showToast('Atividade removida!', 'info');
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    const { error } = await supabase.auth.signOut({ scope: 'local' });
+    if (error) { showToast('Não foi possível encerrar sua sessão. Tente novamente.', 'error'); return; }
     setIsAuthenticated(false);
-    localStorage.removeItem(`suavez_auth_${tenant.slug}`);
-    void getOneSignalId().then(pushId => {
-      if (!pushId) return undefined;
-      return supabase.from('tenants').update({ admin_push_id: null }).eq('id', tenant.id).eq('admin_push_id', pushId);
-    }).finally(() => logoutOneSignal());
+    void logoutOneSignal();
   };
 
   const toggleRole = () => {
@@ -1427,12 +1416,12 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   };
 
   // DERIVED CONFIG: Always recalculate based on current state
-  const prof = getProfessionConfig(tenant.profession);
   const selectedService = tenant.services.find(service => service.id === selectedServiceId);
   const availableTimeSlots = tenant.bookingType === 'appointment' ? generateTimeSlots() : [];
   const selectedDayAppointments = (groupedClientQueue[selectedDate] || [])
     .filter(item => item.status !== 'cancelled');
-  const customerAccent = tenant.primaryColor || '#7257d9';
+  const theme = getTenantTheme(tenant.primaryColor, tenant.secondaryColor);
+  const customerAccent = theme.action;
   const customerSecondary = tenant.secondaryColor || '#ffffff';
   const customerThemeStyle = {
     '--accent-primary': customerAccent,
@@ -1440,13 +1429,17 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     '--accent-secondary': customerSecondary,
     '--customer-accent': customerAccent,
     '--customer-accent-rgb': hexToRgbString(customerAccent),
-    '--customer-on-accent': getReadableAccentText(customerAccent, customerSecondary),
+    '--customer-on-accent': theme.onAction,
+    '--tenant-brand': theme.brand,
   } as React.CSSProperties;
   const adminThemeStyle = {
     ...customerThemeStyle,
-    '--admin-accent': customerAccent,
-    '--admin-accent-rgb': hexToRgbString(customerAccent),
-    '--admin-on-accent': getReadableAccentText(customerAccent, customerSecondary),
+    '--accent-primary': theme.brand,
+    '--accent-primary-rgb': hexToRgbString(theme.brand),
+    '--admin-accent': theme.brand,
+    '--admin-accent-rgb': hexToRgbString(theme.brand),
+    '--admin-on-accent': getReadableAccentText(theme.brand, customerSecondary),
+    '--customer-on-accent': getReadableAccentText(theme.brand, customerSecondary),
   } as React.CSSProperties;
   const activeTabMeta = activeTab === 'atendimento' && tenant.bookingType === 'queue'
     ? {
@@ -1522,29 +1515,13 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     setIsAdminAddModalOpen(true);
   };
 
-  // Dynamic CSS variables for tenant theme dynamically applied to document root 
-  useEffect(() => {
-    const color = tenant.primaryColor || '#d4af37';
-    const sColor = tenant.secondaryColor || '#ffffff';
-    document.documentElement.style.setProperty('--accent-primary', color);
-    document.documentElement.style.setProperty('--accent-primary-rgb', hexToRgbString(color));
-    document.documentElement.style.setProperty('--accent-secondary', sColor);
-    
-    // Cleanup if leaving tenant view
-    return () => {
-      document.documentElement.style.removeProperty('--accent-primary');
-      document.documentElement.style.removeProperty('--accent-primary-rgb');
-      document.documentElement.style.removeProperty('--accent-secondary');
-    };
-  }, [tenant.primaryColor, tenant.secondaryColor]);
-
   return (
-    <>
+    <div className="tenant-experience" style={isAuthenticated ? adminThemeStyle : customerThemeStyle}>
       {/* Professional Login Page (Full Screen Overlay) */}
       {showLogin && (
-        <div className="login-page-overlay fade-in">
+        <div className="login-page-overlay tenant-login fade-in" style={customerThemeStyle} role="dialog" aria-modal="true" aria-labelledby="professional-login-title" ref={loginDialogRef}>
           <div className="login-page-container">
-            <button className="login-back-button" onClick={() => setShowLogin(false)}>
+            <button type="button" className="login-back-button" onClick={() => { setShowLogin(false); setShowPassword(false); }}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
               Voltar para o site
             </button>
@@ -1558,17 +1535,20 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                     <ProfessionIcon profession={tenant.profession} className="profession-icon profession-icon--login" />
                   )}
                 </div>
-                <h2>Acesso Profissional</h2>
-                <p>Gerencie sua fila e agendamentos em tempo real.</p>
+                <span className="tenant-login-name">{tenant.name}</span>
+                <h2 id="professional-login-title">Bom ter você de volta.</h2>
+                <p>Acesse sua área profissional para cuidar dos seus atendimentos.</p>
               </div>
 
               <form onSubmit={handleLogin} className="login-form">
                 <div className="form-group">
-                  <label>E-mail de Acesso</label>
+                  <label htmlFor="professional-email">E-mail de acesso</label>
                   <div className="input-with-icon">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
                     <input 
+                      id="professional-email"
                       type="email" 
+                      autoComplete="username"
                       value={loginEmail} 
                       onChange={(e) => setLoginEmail(e.target.value)} 
                       placeholder="seu@email.com"
@@ -1578,21 +1558,26 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                 </div>
 
                 <div className="form-group">
-                  <label>Sua Senha</label>
-                  <div className="input-with-icon">
+                  <label htmlFor="professional-password">Sua senha</label>
+                  <div className="input-with-icon password-input-shell">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
                     <input 
-                      type="password" 
+                      id="professional-password"
+                      type={showPassword ? 'text' : 'password'}
+                      autoComplete="current-password"
                       value={loginPassword} 
                       onChange={(e) => setLoginPassword(e.target.value)} 
                       placeholder="••••••••"
                       required 
                     />
+                    <button type="button" className="password-toggle" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'} aria-pressed={showPassword}>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>{showPassword && <path d="m3 3 18 18"/>}</svg>
+                    </button>
                   </div>
                 </div>
 
-                <button type="submit" className="btn-submit login-btn">
-                  Acessar Painel
+                <button type="submit" disabled={signingIn} className="btn-submit login-btn">
+                  {signingIn ? 'Entrando…' : 'Entrar no meu painel'}
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
                 </button>
               </form>
@@ -1692,7 +1677,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                     <strong style={{ display: 'block', fontSize: '0.95rem' }}>Atenção: Pagamento Pendente</strong>
                     <p style={{ margin: '2px 0 0 0', fontSize: '0.85rem', opacity: 0.9 }}>
                       {tenant.nextPaymentAt ? (
-                        <>Sua mensalidade venceu em <strong>{new Date(tenant.nextPaymentAt).toLocaleDateString('pt-BR')}</strong>.</>
+                        <>Sua mensalidade venceu em <strong>{formatCalendarDate(tenant.nextPaymentAt)}</strong>.</>
                       ) : (
                         <>Sua mensalidade está pendente de pagamento.</>
                       )}
@@ -1971,7 +1956,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                     </div>
                     <form onSubmit={async (e) => {
                       e.preventDefault();
-                      if (!newProductName || !newProductPrice) return;
+                      if (!newProductName.trim()) { showToast('Informe o nome do produto.', 'warning'); return; }
+                      if (!newProductPrice) return;
                       const productPrice = parseMoneyInput(newProductPrice);
                       if (productPrice === null || productPrice === 0) {
                         showToast('Informe um preço de produto maior que zero.', 'warning');
@@ -1985,7 +1971,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                         try {
                           uploadBlob = await compressImage(newProductImageFile);
                         } catch (error) {
-                          console.warn('Não foi possível comprimir a imagem; o arquivo original será usado.', error);
+                          showToast(error instanceof Error ? error.message : 'Não foi possível processar a imagem.', 'error');
+                          return;
                         }
                         const filePath = `products/${tenant.id}/${Date.now()}.jpg`;
                         const { data: uploadData, error: uploadError } = await supabase.storage
@@ -2175,6 +2162,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                             />
                             <span>{tenant.primaryColor?.toUpperCase() || '#D4AF37'}</span>
                           </div>
+                          <small>A cor aparece nos detalhes. Botões e textos recebem um tom equilibrado para manter a leitura, inclusive no login.</small>
                         </div>
                         <div className="form-group admin-color-field">
                           <label>Cor de texto preferida</label>
@@ -2192,7 +2180,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                       </div>
                       <aside className="admin-brand-preview" aria-label="Prévia da identidade visual">
                         <span className="admin-brand-preview-label">Prévia para o cliente</span>
-                        <div className="admin-brand-preview-stage" style={{ background: customerAccent, color: getReadableAccentText(customerAccent, customerSecondary) }}>
+                        <div className="admin-brand-preview-stage" style={customerThemeStyle}>
                           <div className="admin-brand-preview-mark"><ProfessionIcon profession={tenant.profession} /></div>
                           <span>Atendimento digital</span>
                           <strong>{tenant.name}</strong>
@@ -2776,7 +2764,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         </div>
       ) : (
         /* CLIENT VIEW */
-        <div className="app-container customer-app" style={customerThemeStyle}>
+        <div className="app-container customer-app" style={customerThemeStyle} inert={showLogin}>
           <header className="customer-topbar">
             <div className="customer-platform-brand">
               <BrandMark className="customer-platform-mark" />
@@ -2796,7 +2784,6 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
           {/* Hero Section */}
           <section className="hero-section customer-hero fade-in">
-            <div className="hero-background-glow"></div>
             <div className="customer-hero-pattern" aria-hidden="true"></div>
             <div className="hero-content">
               <div className="hero-brand">
@@ -2820,8 +2807,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                   <h1 className="hero-title">{tenant.name}</h1>
                   <p className="hero-subtitle">
                     {tenant.bookingType === 'appointment' 
-                      ? `Agende seu horário com os melhores profissionais de ${prof.label.toLowerCase()}.` 
-                      : `Entre na fila virtual e economize tempo esperando de onde quiser.`}
+                      ? 'Um momento para você. Escolha seu serviço e reserve o melhor horário.'
+                      : 'Seu tempo merece mais. Entre na fila e espere de onde quiser.'}
                   </p>
                 </div>
               </div>
@@ -2842,7 +2829,8 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                        onClick={openCustomerJoin}
                        className="hero-cta-button"
                      >
-                       {tenant.bookingType === 'appointment' ? 'Agendar Agora' : 'Garantir meu Lugar'}
+                       {tenant.bookingType === 'appointment' ? 'Agendar meu horário' : 'Entrar na fila'}
+                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
                      </button>
                    )}
                    {products.length > 0 && (
@@ -2863,7 +2851,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
             </div>
           </section>
 
-          {!notifsEnabled && (
+          {!notifsEnabled && myItemsInQueue.length > 0 && (
             <section className="notification-opt-in notification-opt-in--customer" aria-label="Ativar notificações">
               <span className="notification-opt-in__icon" aria-hidden="true">
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
@@ -2918,9 +2906,11 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
           <main className="main-content customer-main-content">
             {/* Form Section */}
             <section
+              ref={customerFormRef}
+              inert={showJoinConfirmation}
               className={`form-panel glass-panel customer-form-panel ${showMobileJoinModal ? 'mobile-join-modal is-open' : ''} ${myItemsInQueue.length > 0 && !forceShowJoinForm ? 'has-active-presence' : ''}`}
               role={showMobileJoinModal ? 'dialog' : undefined}
-              aria-modal={showMobileJoinModal ? true : undefined}
+              aria-modal={showMobileJoinModal && !showJoinConfirmation ? true : undefined}
               aria-label={showMobileJoinModal ? (tenant.bookingType === 'appointment' ? 'Fazer agendamento' : 'Entrar na fila') : undefined}
             >
               <button
@@ -3087,34 +3077,37 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                     <label htmlFor="customer-name">Seu nome</label>
                     <div className="customer-input-shell">
                       <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
-                      <input id="customer-name" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Como podemos chamar você?" required />
+                      <input id="customer-name" type="text" autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Como podemos chamar você?" required />
                     </div>
                   </div>
                   <div className="form-group">
                     <label htmlFor="customer-whatsapp">WhatsApp</label>
                     <div className="customer-input-shell">
                       <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.5 9.5 0 0 1-4-.9l-5 1 1.1-4.8a8.7 8.7 0 1 1 16.9-3.7Z"/><path d="M8.5 8.4c.7 3 2.1 4.4 5.1 5.1"/></svg>
-                      <input id="customer-whatsapp" type="tel" value={customerWhatsapp} onChange={handlePhoneChange} placeholder="(00) 90000-0000" required />
+                      <input id="customer-whatsapp" type="tel" autoComplete="tel-national" inputMode="tel" value={customerWhatsapp} onChange={handlePhoneChange} placeholder="(00) 90000-0000" required />
                     </div>
                   </div>
                   <div className="form-group">
-                    <label>Serviço</label>
+                    <label id="customer-service-label" htmlFor="customer-service">Serviço</label>
                     <div className="service-selector-simple">
                       <button 
+                        id="customer-service"
+                        aria-labelledby="customer-service-label customer-service-value"
                         type="button" 
                         className={`selector-trigger ${isServiceListOpen ? 'open' : ''}`}
+                        disabled={tenant.services.length === 0}
                         onClick={() => setIsServiceListOpen(!isServiceListOpen)}
                         aria-expanded={isServiceListOpen}
                         aria-haspopup="listbox"
                       >
                         <span className="selector-trigger-copy">
-                          <strong>{selectedService?.name || 'Selecione um serviço'}</strong>
-                          <small>{selectedService ? `${selectedService.duration || 30} min · R$ ${selectedService.price.toFixed(2).replace('.', ',')}` : 'Veja duração e valor antes de continuar'}</small>
+                          <strong id="customer-service-value">{selectedService?.name || (tenant.services.length ? 'Selecione um serviço' : 'Serviços indisponíveis no momento')}</strong>
+                          <small>{selectedService ? `${selectedService.duration || 30} min · R$ ${selectedService.price.toFixed(2).replace('.', ',')}` : (tenant.services.length ? 'Veja duração e valor antes de continuar' : 'O estabelecimento ainda não disponibilizou serviços.')}</small>
                         </span>
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
                       </button>
                       
-                      {isServiceListOpen && (
+                      {isServiceListOpen && tenant.services.length > 0 && (
                         <div className="simple-vertical-list fade-in" role="listbox" aria-label="Serviços disponíveis">
                           {tenant.services.map(s => (
                             <button 
@@ -3220,27 +3213,6 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                     </div>
                   )}
 
-                  {/* Notification Recommendation (Non-blocking) */}
-                  {import.meta.env.PROD && !notifsEnabled && (
-                    <div style={{ marginTop: '1.5rem', padding: '1.25rem', background: 'rgba(var(--accent-primary-rgb), 0.05)', borderRadius: '16px', border: '1px solid rgba(var(--accent-primary-rgb), 0.1)', textAlign: 'center' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', justifyContent: 'center', marginBottom: '0.75rem', color: 'var(--accent-primary)' }}>
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
-                        <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>Ative as Notificações</span>
-                      </div>
-                      <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1rem', lineHeight: '1.4' }}>
-                        Para receber avisos em tempo real e não perder sua vez, recomendamos ativar as notificações abaixo.
-                      </p>
-                      <button 
-                        type="button" 
-                        onClick={() => void enableNotifications()}
-                        className="btn-secondary" 
-                        style={{ width: '100%', fontSize: '0.85rem', padding: '10px', background: 'white' }}
-                      >
-                        Ativar Agora
-                      </button>
-                    </div>
-                  )}
-
                   <button
                     type="submit"
                     className="btn-submit customer-submit-button"
@@ -3282,7 +3254,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                  <div className="customer-queue-header-inner">
                    <div className="customer-queue-heading-copy">
                      <span className="customer-section-kicker">Atualização em tempo real</span>
-                     <h2 style={{ margin: '0 0 6px 0' }}>{tenant.bookingType === 'appointment' ? 'Agenda do dia' : 'Acompanhe a Fila'}</h2>
+                     <h2 style={{ margin: '0 0 6px 0' }}>{tenant.bookingType === 'appointment' ? 'Agenda do dia' : 'Como está a fila?'}</h2>
                     <p style={{ fontSize: '0.95rem', color: 'var(--text-secondary)', margin: 0, opacity: 0.9, lineHeight: '1.5' }}>
                       {tenant.bookingType === 'appointment' 
                         ? 'Consulte os horários já reservados sem expor os dados de outros clientes.'
@@ -3317,17 +3289,6 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                   )}
                 </div>
               </div>
-              {(tenant.bookingType === 'appointment' || tenant.isOnline) && myItemsInQueue.length < 4 && (
-                <div className="mobile-join-cta-wrap">
-                  <button type="button" className="mobile-join-cta" onClick={openCustomerJoin}>
-                    <span>
-                      <small>{tenant.bookingType === 'appointment' ? 'Escolha dia e horário' : 'Atendimento por ordem de chegada'}</small>
-                      <strong>{tenant.bookingType === 'appointment' ? 'Agendar meu horário' : 'Garantir meu lugar'}</strong>
-                    </span>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-                  </button>
-                </div>
-              )}
               <div className="queue-list" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
                 {publicQueueItems.length > 0 ? (
                   <div className="client-day-group fade-in">
@@ -3382,12 +3343,12 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                         <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="12" r="1.5"/><circle cx="11" cy="12" r="1.8"/><circle cx="17" cy="12" r="2.1"/><path d="M19 12h3m-2-2 2 2-2 2"/></svg>
                       )}
                     </div>
-                    <span className="customer-empty-kicker">Tudo tranquilo por aqui</span>
-                    <h3>{tenant.bookingType === 'appointment' ? 'Agenda livre para este dia' : 'A fila está livre agora'}</h3>
+                    <span className="customer-empty-kicker">{tenant.bookingType !== 'appointment' && !tenant.isOnline ? 'Voltamos em breve' : 'Tudo tranquilo por aqui'}</span>
+                    <h3>{tenant.bookingType === 'appointment' ? 'Seu próximo horário está aqui' : tenant.isOnline ? 'Pode chegar, a fila está livre' : 'Atendimento encerrado por agora'}</h3>
                     <p style={{ color: 'var(--text-secondary)', maxWidth: '300px', margin: '0 auto', fontSize: '0.95rem', lineHeight: '1.5' }}>
                       {tenant.bookingType === 'appointment'
                         ? (selectedDate === todayStr ? 'Não há compromissos marcados para hoje.' : `Não há compromissos marcados para o dia ${new Date(selectedDate + 'T12:00:00').toLocaleDateString('pt-BR')}.`)
-                        : 'Entre agora e seja uma das próximas pessoas a serem atendidas.'}
+                        : tenant.isOnline ? 'Escolha seu serviço e seja a próxima pessoa a ser atendida.' : 'A fila abre novamente quando o profissional retomar os atendimentos.'}
                     </p>
                     {(tenant.bookingType === 'appointment' || tenant.isOnline) && myItemsInQueue.length === 0 && (
                       <button type="button" className="customer-empty-cta" onClick={openCustomerJoin}>
@@ -3400,6 +3361,16 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
               </div>
             </section>
           </main>
+          {(tenant.bookingType === 'appointment' || tenant.isOnline) && myItemsInQueue.length < 4 && (
+            <div className="mobile-join-cta-wrap" inert={showMobileJoinModal}>
+              <div className="mobile-join-context"><span className="mobile-join-dot" aria-hidden="true"/><span>{tenant.bookingType === 'appointment' ? 'Reserve em poucos passos' : waitingCount === 0 ? 'Sem espera na fila agora' : `${waitingCount} ${waitingCount === 1 ? 'pessoa na fila' : 'pessoas na fila'}`}</span></div>
+              <button type="button" className="mobile-join-cta" onClick={openCustomerJoin}>
+                <strong>{myItemsInQueue.length > 0 ? 'Adicionar acompanhante' : tenant.bookingType === 'appointment' ? 'Agendar meu horário' : 'Entrar na fila'}</strong>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+              </button>
+            </div>
+          )}
+          <footer className="customer-footer">Seu atendimento com mais tranquilidade.<span>Feito com Sua Vez</span></footer>
         </div>
       )}
 
@@ -3420,9 +3391,9 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
       {/* Join Queue Confirmation Modal */}
       {showJoinConfirmation && (
-        <div className="modal-overlay" style={{ zIndex: 10001 }}>
-          <div className="modal-content glass-panel fade-in" style={{ maxWidth: '400px', textAlign: 'center', background: 'var(--bg-surface)' }}>
-            <h3 style={{ fontSize: '1.5rem', marginBottom: '1rem' }}>Confirmar Presença</h3>
+        <div className="modal-overlay" style={{ zIndex: 10004 }}>
+          <div ref={joinConfirmationRef} role="dialog" aria-modal="true" aria-labelledby="join-confirmation-title" className="modal-content glass-panel fade-in" style={{ maxWidth: '400px', textAlign: 'center', background: 'var(--bg-surface)' }}>
+            <h3 id="join-confirmation-title" style={{ fontSize: '1.5rem', marginBottom: '1rem' }}>Confirmar presença</h3>
             <div style={{ background: 'rgba(var(--accent-primary-rgb), 0.05)', padding: '1.5rem', borderRadius: '16px', marginBottom: '1.5rem', border: '1px solid rgba(var(--accent-primary-rgb), 0.1)' }}>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '0.5rem' }}>Você está solicitando:</p>
               <h4 style={{ fontSize: '1.2rem', color: 'var(--text-primary)', marginBottom: '4px' }}>
@@ -3639,6 +3610,6 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         </div>
       )}
 
-    </>
+    </div>
   );
 }

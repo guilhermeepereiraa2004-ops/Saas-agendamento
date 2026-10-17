@@ -26,3 +26,12 @@ dist-ssr
 
 .vercel
 .env*
+
+# Local audit reports and account-specific recovery operations
+scratch/admin-audit/*
+!scratch/admin-audit/run.mjs
+!scratch/admin-audit/push-api.mjs
+scripts/transfer-master.sql
+scripts/verify-master-transfer.sql
+scripts/test-master-transfer.mjs
+scripts/prepare-security-review.mjs

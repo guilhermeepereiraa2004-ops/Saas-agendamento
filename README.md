@@ -13,12 +13,17 @@ Sistema de gerenciamento de filas e agendamentos multirrecursos (barbearias, lav
 3. **Variáveis de Ambiente**:
    No campo "Environment Variables", adicione:
    - `VITE_SUPABASE_URL`: (Copie a URL do seu painel Supabase)
-   - `VITE_SUPABASE_ANON_KEY`: (Copie a chave anônima do seu painel Supabase)
+   - `VITE_SUPABASE_ANON_KEY`: chave pública atual do Supabase (`sb_publishable_...`). O nome da variável foi mantido por compatibilidade; ela também aceita a chave `anon` antiga durante a migração.
+   - `SUPABASE_SECRET_KEY`: chave secreta atual do Supabase (`sb_secret_...`), somente no servidor. Necessária para provisionar contas e verificar o destinatário das notificações. Configure como Secret em Production. **Nunca use o prefixo `VITE_` nesta chave.** O servidor também aceita `SUPABASE_SERVICE_ROLE_KEY` por compatibilidade; `SUPABASE_SECRET_KEY` tem prioridade.
    - `VITE_ONESIGNAL_APP_ID`: ID público do aplicativo no OneSignal.
    - `ONESIGNAL_REST_API_KEY`: chave REST privada do OneSignal. Esta variável é usada somente pela função `/api/send-push` e **nunca deve receber o prefixo `VITE_`**.
    - `APP_ORIGIN`: domínio canônico da aplicação, por exemplo `https://suavez.app`.
 
    Se uma chave REST já foi publicada anteriormente como `VITE_ONESIGNAL_REST_API_KEY`, gere uma nova chave no OneSignal, configure `ONESIGNAL_REST_API_KEY` na Vercel e revogue a antiga.
+
+   Ao migrar as chaves do Supabase, atualize tanto a chave pública quanto a secreta, publique novamente e valide os fluxos antes de desativar as chaves legadas. Desativar as chaves legadas interrompe chamadas de versões antigas que ainda as utilizem; abas já abertas precisam recarregar a versão publicada. As novas chaves são enviadas no cabeçalho `apikey`; o JWT do usuário continua no cabeçalho de autorização das chamadas autenticadas.
+
+   Se uma chave `service_role` antiga foi exposta, desativá-la como API key não basta: ela também é um JWT. Depois de confirmar que uma assinatura nova está ativa e as aplicações usam as chaves atuais, revogue a assinatura legada para invalidar esses tokens. Não revogue a assinatura atual. Usuários com tokens assinados pela chave revogada podem precisar entrar novamente. Consulte [JWT Signing Keys](https://supabase.com/docs/guides/auth/signing-keys).
 
 ## 🛠️ Tecnologias
 - **Frontend**: React 19 + TypeScript + Vite 8
@@ -36,7 +41,47 @@ npm run dev
 
 # Gerar build de produção
 npm run build
+
+# Verificar contraste dos temas personalizados
+npm run test:theme
+
+# Testar permissões e integridade financeira em PostgreSQL isolado
+npm run test:database
+
+# Testar a API de criação e migração de contas sem chamadas reais
+node scripts/test-accounts.mjs
+
+# Testar notificações com dados e provedores simulados
+node scratch/admin-audit/push-api.mjs
 ```
+
+A auditoria de interface está em `scratch/admin-audit/run.mjs` e usa o build de `dist`. Ela requer o pacote Playwright e o navegador Chrome; `AUDIT_PLAYWRIGHT` permite informar o caminho do pacote quando instalado fora do projeto. Relatórios, capturas e scripts específicos de contas reais permanecem fora do Git.
+
+## Migração para autenticação segura
+
+Aplique `supabase/migrations/20261017190332_secure_access_and_financial_integrity.sql` junto com a publicação do novo código. A migração remove permanentemente a coluna de senhas em texto puro, restringe as tabelas por estabelecimento e cria funções transacionais para receitas e despesas. Não exclui registros financeiros existentes.
+
+Antes da ativação, crie a conta do administrador pelo Supabase Auth com senha nova. No SQL Editor, vincule o usuário pelo e-mail conferido (substitua o exemplo):
+
+```sql
+insert into app_private.platform_admins(user_id)
+select id from auth.users where email = 'seu-email@example.com'
+on conflict do nothing;
+```
+
+Confirme que existe exatamente uma conta correspondente antes de vincular. Não use `user_metadata` para conceder acesso. Depois, pelo painel master, edite cada estabelecimento antigo e defina uma senha nova com ao menos 12 caracteres para migrar o acesso do profissional. As senhas anteriores não são reutilizadas.
+
+Reservas anteriores à migração não possuem o token de propriedade do cliente. Continuam gerenciáveis pelo profissional; o cliente precisará contatar o estabelecimento para alterar essas reservas antigas. Novas reservas recebem um token aleatório e só aceitam alterações do cliente mediante essa prova.
+
+A conclusão de atendimento exige o status em atendimento. A função grava a receita e remove a fila em uma única transação, protegida por bloqueio e índice único. Repetições retornam a receita existente. Despesas usam um identificador por solicitação e validam o conteúdo ao repetir uma tentativa. Duplicações históricas não são excluídas automaticamente, pois valor e horário iguais não provam duplicidade.
+
+### Redefinir a senha master sem recuperação por e-mail
+
+O utilitário local `node scripts/reset-master-password.mjs` atualiza somente a senha da conta identificada no arquivo local ignorado `.master-reset.local` (metadados `projectRef`, `userId` e `email`, sem credenciais). Ele aceita a chave secreta atual ou a chave `service_role` antiga e confirma a conta no projeto esperado pela API administrativa antes de aceitar a nova senha.
+
+Execute em um terminal interativo. A chave e a senha são solicitadas com entrada oculta e não são gravadas em arquivo. Não passe credenciais como argumentos do comando. O identificador da conta é preservado, mantendo o vínculo master. Testes isolados: `node scripts/test-master-reset.mjs`.
+
+No Windows, `node scripts/reset-master-password.mjs --window` oferece campos protegidos e um botão para colar a chave. As credenciais trafegam somente em memória entre os processos locais e o endpoint Auth do projeto.
 
 ## 📄 Notas de Roteamento
 O arquivo `vercel.json` já está configurado para lidar com rotas de Single Page Application (SPA), garantindo que atualizações de página em sub-rotas como `/dashboard` não retornem erro 404.

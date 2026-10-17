@@ -1,4 +1,5 @@
 /// <reference types="node" />
+import { verifyStaff, serverConfig } from './_lib/auth.js';
 
 type PushEventName =
   | 'client_joined'
@@ -97,16 +98,15 @@ async function stableUuid(value: string) {
 }
 
 async function getSupabaseRow<T>(path: string): Promise<T | null> {
-  const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL)?.trim().replace(/\/$/, '');
-  const supabaseKey = (process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY)?.trim();
-  if (!supabaseUrl || !supabaseKey) throw new Error('Supabase server environment is not configured');
+  const config = serverConfig();
+  if (!config) throw new Error('Supabase server environment is not configured');
 
-  const response = await fetch(`${supabaseUrl}/rest/v1/${path}`, {
+  const response = await fetch(`${config.url}/rest/v1/${path}`, {
     headers: {
-      apikey: supabaseKey,
-      Authorization: `Bearer ${supabaseKey}`,
+      ...config.headers,
       Accept: 'application/json',
     },
+    signal: AbortSignal.timeout(8000),
   });
   if (!response.ok) throw new Error(`Supabase lookup failed (${response.status})`);
   const rows = await response.json() as T[];
@@ -160,7 +160,7 @@ export default {
     const contentLength = Number(request.headers.get('content-length') || 0);
     if (contentLength > 4096) return json({ error: 'Payload too large' }, 413);
 
-    let body: { event?: string; tenantId?: string; queueItemId?: string };
+    let body: { event?: string; tenantId?: string; queueItemId?: string; customerToken?: string };
     try {
       const rawBody = await request.text();
       if (rawBody.length > 4096) return json({ error: 'Payload too large' }, 413);
@@ -178,6 +178,17 @@ export default {
     }
 
     try {
+    if (event !== 'client_joined' && event !== 'client_on_way') {
+      if (!await verifyStaff(request, tenantId)) return json({ error: 'Unauthorized' }, 401);
+      if (!serverConfig()) return json({ error: 'Server is not configured' }, 503);
+    } else {
+      const config = serverConfig();
+      if (!config) return json({ error: 'Server is not configured' }, 503);
+      if (!body.customerToken || body.customerToken.length < 32 || body.customerToken.length > 128) return json({ error: 'Unauthorized' }, 401);
+      const proof = await fetch(`${config.url}/rest/v1/rpc/verify_customer_queue_access`, { method: 'POST', headers: config.headers, body: JSON.stringify({ p_queue_id: queueItemId, p_tenant_id: tenantId, p_token: body.customerToken }), signal: AbortSignal.timeout(8000) });
+      if (!proof.ok || await proof.json() !== true) return json({ error: 'Unauthorized' }, 401);
+    }
+
       const itemQuery = `queue_items?id=eq.${encodeURIComponent(queueItemId)}&tenant_id=eq.${encodeURIComponent(tenantId)}&select=id,name,service_name,status,is_on_way,push_id,appointment_time`;
       const tenantQuery = `tenants?id=eq.${encodeURIComponent(tenantId)}&select=id,name,slug`;
       const [item, tenant] = await Promise.all([
@@ -190,9 +201,7 @@ export default {
       if (!eventMessage) return json({ skipped: true, reason: 'Event state or subscription is not eligible' }, 202);
 
       const appId = (process.env.ONESIGNAL_APP_ID || process.env.VITE_ONESIGNAL_APP_ID)?.trim();
-      // Compatibilidade temporária com projetos que ainda cadastraram a chave com o
-      // prefixo antigo. A chave nunca é importada pelo bundle do navegador.
-      const restApiKey = (process.env.ONESIGNAL_REST_API_KEY || process.env.VITE_ONESIGNAL_REST_API_KEY)?.trim();
+      const restApiKey = process.env.ONESIGNAL_REST_API_KEY?.trim();
       if (!appId || !restApiKey) return json({ error: 'Push provider is not configured' }, 503);
 
       // APP_ORIGIN was historically configured without the protocol in this project.
@@ -228,9 +237,10 @@ export default {
           idempotency_key: idempotencyKey,
           custom_data: { event, queue_item_id: queueItemId, tenant_id: tenantId },
         }),
+        signal: AbortSignal.timeout(10000),
       });
 
-      const providerResult = await oneSignalResponse.json().catch(() => ({}));
+      const providerResult = await oneSignalResponse.json().catch(() => ({})) as { id?: string; errors?: unknown };
       if (!oneSignalResponse.ok) {
         const providerErrors = providerResult && typeof providerResult === 'object' && 'errors' in providerResult
           ? (providerResult as { errors?: unknown }).errors

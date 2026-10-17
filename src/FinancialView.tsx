@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from './lib/supabase';
 import { useToasts } from './lib/toast';
 import type { Profession } from './types';
@@ -44,6 +44,9 @@ export default function FinancialView({ tenantId }: Props) {
   const [loading, setLoading] = useState(true);
   const [expenseDescription, setExpenseDescription] = useState('');
   const [expenseAmount, setExpenseAmount] = useState('');
+  const expenseInFlight = useRef(false);
+  const expenseRequest = useRef<{ key: string; signature: string } | null>(null);
+  const [savingExpense, setSavingExpense] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState<string>(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -85,6 +88,7 @@ export default function FinancialView({ tenantId }: Props) {
 
   const handleAddExpense = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (expenseInFlight.current) return;
     const description = expenseDescription.trim();
     const amount = parseCurrencyInput(expenseAmount);
     if (!description || amount === null) {
@@ -92,13 +96,13 @@ export default function FinancialView({ tenantId }: Props) {
       return;
     }
 
-    const { error } = await supabase
-      .from('tenant_expenses')
-      .insert([{
-        tenant_id: tenantId,
-        description,
-        amount,
-      }]);
+    const signature = JSON.stringify([tenantId, description, amount]);
+    if (expenseRequest.current?.signature !== signature) expenseRequest.current = { key: crypto.randomUUID(), signature };
+    expenseInFlight.current = true; setSavingExpense(true);
+    try {
+    const { error } = await supabase.rpc('record_expense', {
+      p_tenant_id: tenantId, p_description: description, p_amount: amount, p_request_id: expenseRequest.current.key,
+    });
 
     if (error) {
       showToast('Não foi possível registrar a saída: ' + error.message, 'error');
@@ -107,6 +111,7 @@ export default function FinancialView({ tenantId }: Props) {
 
     setExpenseDescription('');
     setExpenseAmount('');
+    expenseRequest.current = null;
     setSelectedMonth(localMonthKey(new Date()));
 
     const { data, error: refreshError } = await supabase
@@ -125,6 +130,7 @@ export default function FinancialView({ tenantId }: Props) {
       created_at: e.created_at
     })));
     showToast('Saída registrada no mês atual.', 'success');
+    } finally { expenseInFlight.current = false; setSavingExpense(false); }
   };
 
   const handleDeleteExpense = async (id: string) => {
@@ -355,7 +361,7 @@ export default function FinancialView({ tenantId }: Props) {
                   onChange={e => setExpenseAmount(e.target.value)}
                   style={{ flexGrow: 1, minWidth: '80px' }}
                 />
-                <button type="submit" className="btn-submit" style={{ width: 'auto', minWidth: '100px', flexShrink: 0, padding: '0 20px', background: 'var(--danger)', color: '#fff' }}>Lançar</button>
+                <button type="submit" disabled={savingExpense} className="btn-submit" style={{ width: 'auto', minWidth: '100px', flexShrink: 0, padding: '0 20px', background: 'var(--danger)', color: '#fff' }}>{savingExpense ? 'Salvando…' : 'Lançar'}</button>
               </div>
             </div>
           </form>

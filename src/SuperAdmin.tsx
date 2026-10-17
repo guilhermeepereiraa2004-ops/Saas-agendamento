@@ -5,6 +5,9 @@ import { PROFESSION_CONFIG } from './lib/professionConfig';
 import { useToasts } from './lib/toast';
 import { ProfessionIcon } from './components/ProfessionIcon';
 import './SuperAdminRedesign.css';
+import { authorizationHeaders } from './lib/access';
+import { TENANT_FIELDS } from './lib/tenantData';
+import { validBilling } from './lib/validation';
 
 interface TenantDraft {
   name: string;
@@ -61,7 +64,7 @@ export default function SuperAdmin() {
 
   const fetchTenants = useCallback(async () => {
     // Fetch tenants
-    const { data, error } = await supabase.from('tenants').select('*').order('created_at', { ascending: false });
+    const { data, error } = await supabase.from('tenants').select(`${TENANT_FIELDS},login_email`).order('created_at', { ascending: false });
     
     // Fetch settings
     const { data: settingsData } = await supabase.from('platform_settings').select('*').limit(1).single();
@@ -81,7 +84,6 @@ export default function SuperAdmin() {
         hasLogo: t.has_logo,
         logoUrl: t.logo_url,
         loginEmail: t.login_email,
-        loginPassword: t.login_password,
         profession: t.profession || 'barber',
         bookingType: t.booking_type || 'queue',
         subscriptionStatus: t.subscription_status || 'trial',
@@ -118,6 +120,7 @@ export default function SuperAdmin() {
 
   const saveTenantToSupabase = async (tenantData: TenantDraft) => {
     setLoading(true);
+    if (!validBilling(tenantData.monthlyFee, tenantData.paymentDay)) { showToast('Informe uma mensalidade não negativa e dia de pagamento entre 1 e 31.', 'warning'); setLoading(false); return false; }
     const dbData = {
       name: tenantData.name,
       slug: tenantData.slug,
@@ -126,7 +129,6 @@ export default function SuperAdmin() {
       has_logo: tenantData.hasLogo,
       logo_url: tenantData.logoUrl,
       login_email: tenantData.loginEmail,
-      login_password: tenantData.loginPassword,
       profession: tenantData.profession,
       booking_type: tenantData.bookingType,
       subscription_status: tenantData.subscriptionStatus,
@@ -136,14 +138,12 @@ export default function SuperAdmin() {
       secondary_color: tenantData.secondaryColor
     };
 
-    let error;
-    if (editingTenantId) {
-      const { error: err } = await supabase.from('tenants').update(dbData).eq('id', editingTenantId);
-      error = err;
-    } else {
-      const { error: err } = await supabase.from('tenants').insert([dbData]);
-      error = err;
-    }
+    let error: { message: string } | undefined;
+    try {
+      const response = await fetch('/api/tenant-account', { method: 'POST', headers: { 'Content-Type': 'application/json', ...await authorizationHeaders() }, body: JSON.stringify({ id: editingTenantId, tenant: dbData, password: tenantData.loginPassword || undefined }) });
+      const result = await response.json();
+      if (!response.ok) error = { message: result.error || 'Não foi possível salvar o cadastro.' };
+    } catch { error = { message: 'Falha de conexão. Tente novamente.' }; }
 
     setLoading(false);
     if (error) {
@@ -281,6 +281,7 @@ export default function SuperAdmin() {
     setSlug('');
     setWhatsapp('');
     setPrimaryColor('#eab308');
+    setSecondaryColor('#ffffff');
     setHasLogo(false);
     setLogoUrl('');
     setLoginEmail('');
@@ -302,13 +303,14 @@ export default function SuperAdmin() {
     setHasLogo(tenant.hasLogo || false);
     setLogoUrl(tenant.logoUrl || '');
     setLoginEmail(tenant.loginEmail || '');
-    setLoginPassword(tenant.loginPassword || '');
+    setLoginPassword('');
+    setSecondaryColor(tenant.secondaryColor || '#ffffff');
     setProfession(tenant.profession || 'barber');
     setBookingType(tenant.bookingType || 'queue');
     setSubscriptionStatus(tenant.subscriptionStatus || 'trial');
     setNextPaymentAt(tenant.nextPaymentAt || '');
     setPaymentDay(tenant.paymentDay || 10);
-    setMonthlyFee(tenant.monthlyFee || 59.90);
+    setMonthlyFee(tenant.monthlyFee ?? 59.90);
     setActiveTab('tenants');
     setShowForm(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -316,7 +318,7 @@ export default function SuperAdmin() {
 
   const handleOpenFinancialMode = (tenant: Tenant) => {
     setFinancialEditingTenant(tenant);
-    setMonthlyFee(tenant.monthlyFee || 59.90);
+    setMonthlyFee(tenant.monthlyFee ?? 59.90);
     setNextPaymentAt(tenant.nextPaymentAt || '');
     setPaymentDay(tenant.paymentDay || 10);
     setSubscriptionStatus(tenant.subscriptionStatus || 'trial');
@@ -325,6 +327,7 @@ export default function SuperAdmin() {
 
   const handleQuickFinancialUpdate = async () => {
     if (!financialEditingTenant) return;
+    if (!validBilling(monthlyFee, paymentDay)) { showToast('Informe uma mensalidade não negativa e dia de pagamento entre 1 e 31.', 'warning'); return; }
     
     setLoading(true);
     const { error } = await supabase.from('tenants').update({
@@ -397,6 +400,10 @@ export default function SuperAdmin() {
         </nav>
 
         <div style={{ marginTop: 'auto', paddingTop: '2rem' }}>
+          <button type="button" className="nav-item" onClick={async () => {
+            const { error } = await supabase.auth.signOut({ scope: 'local' });
+            if (error) showToast('Não foi possível encerrar a sessão. Tente novamente.', 'error');
+          }}>Sair do painel</button>
           <div className="nav-item" style={{ cursor: 'default', background: 'rgba(255,255,255,0.02)' }}>
             <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifySelf: 'center', color: '#000', fontWeight: 'bold', fontSize: '0.8rem', justifyContent: 'center' }}>AD</div>
             <div className="nav-text" style={{ marginLeft: '10px' }}>
@@ -504,7 +511,7 @@ export default function SuperAdmin() {
                       </div>
                       <div className="form-group" style={{ margin: 0 }}>
                         <label>Senha de Login</label>
-                        <input type="password" value={loginPassword} onChange={e => setLoginPassword(e.target.value)} minLength={6} required placeholder="••••••••" />
+                        <input type="password" value={loginPassword} onChange={e => setLoginPassword(e.target.value)} minLength={12} required={!editingTenantId} autoComplete="new-password" placeholder={editingTenantId ? 'Deixe vazio para manter a senha' : 'Mínimo de 12 caracteres'} />
                       </div>
                     </div>
                   </div>
@@ -735,16 +742,18 @@ export default function SuperAdmin() {
                 <input 
                   type="text" 
                   placeholder="Pesquisar por nome do estabelecimento..." 
+                  aria-label="Pesquisar estabelecimento no financeiro"
                   value={financialSearch}
                   onChange={(e) => setFinancialSearch(e.target.value)}
-                  style={{ width: '100%', padding: '12px 12px 12px 40px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#fff' }}
+                  style={{ width: '100%', padding: '12px 12px 12px 40px', background: 'var(--bg-surface)', border: '1px solid #cbd5e1', borderRadius: '12px', color: 'var(--text-primary)' }}
                 />
               </div>
               <div style={{ minWidth: '180px' }}>
                 <select 
+                  aria-label="Filtrar assinaturas por status"
                   value={financialFilter}
                   onChange={(e) => setFinancialFilter(e.target.value)}
-                  style={{ width: '100%', padding: '12px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#fff' }}
+                  style={{ width: '100%', padding: '12px', background: 'var(--bg-surface)', border: '1px solid #cbd5e1', borderRadius: '12px', color: 'var(--text-primary)' }}
                 >
                   <option value="all">Todos os Status</option>
                   <option value="active">Em dia</option>
@@ -763,7 +772,7 @@ export default function SuperAdmin() {
                 </div>
                 <div className="stat-info">
                   <span className="stat-label">Faturamento MRR</span>
-                  <span className="stat-value">R$ {tenants.reduce((acc, curr) => acc + (curr.monthlyFee || 0), 0).toFixed(2)}</span>
+                  <span className="stat-value">R$ {tenants.filter(t => t.isActive !== false && t.subscriptionStatus === 'active').reduce((acc, curr) => acc + (curr.monthlyFee ?? 0), 0).toFixed(2)}</span>
                 </div>
               </div>
               <div className="stat-card">
@@ -831,13 +840,13 @@ export default function SuperAdmin() {
                           fontWeight: 800,
                           textTransform: 'uppercase',
                           background: 
-                            tenant.subscriptionStatus === 'active' ? 'rgba(16,185,129,0.1)' : 
-                            tenant.subscriptionStatus === 'overdue' ? 'rgba(239,68,68,0.1)' : 
-                            'rgba(255,255,255,0.05)',
+                            tenant.subscriptionStatus === 'active' ? '#dcfce7' :
+                            tenant.subscriptionStatus === 'overdue' ? '#fee2e2' :
+                            tenant.subscriptionStatus === 'trial' ? '#fef3c7' : '#f1f5f9',
                           color: 
-                            tenant.subscriptionStatus === 'active' ? '#10b981' : 
-                            tenant.subscriptionStatus === 'overdue' ? '#ef4444' : 
-                            '#fff'
+                            tenant.subscriptionStatus === 'active' ? '#166534' :
+                            tenant.subscriptionStatus === 'overdue' ? '#991b1b' :
+                            tenant.subscriptionStatus === 'trial' ? '#854d0e' : '#334155'
                         }}>
                           {tenant.subscriptionStatus === 'active' ? 'Em dia' : 
                            tenant.subscriptionStatus === 'overdue' ? 'Atrasado' : 

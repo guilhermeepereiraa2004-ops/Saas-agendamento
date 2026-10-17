@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import ts from 'typescript';
+const compiled=ts.transpileModule(await readFile(new URL('../api/_lib/auth.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+const {serverConfig}=await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
+process.env.SUPABASE_URL='https://fixture.invalid';
+delete process.env.SUPABASE_SECRET_KEY;
+process.env.SUPABASE_SERVICE_ROLE_KEY='legacy-fixture';
+assert.equal(serverConfig().headers.Authorization,'Bearer legacy-fixture');
+process.env.SUPABASE_SERVICE_ROLE_KEY='sb_secret_fixture_only_not_a_real_key';
+assert.equal(serverConfig().headers.apikey,process.env.SUPABASE_SERVICE_ROLE_KEY);
+assert.ok(!('Authorization' in serverConfig().headers));
+process.env.SUPABASE_SECRET_KEY='sb_secret_preferred_fixture_only';
+assert.equal(serverConfig().headers.apikey,process.env.SUPABASE_SECRET_KEY);
+delete process.env.SUPABASE_SECRET_KEY;
+delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+assert.equal(serverConfig(),null);
+console.log('PASS server keys: legacy header, modern apikey, preferred secret, fail closed');

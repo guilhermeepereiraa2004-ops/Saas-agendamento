@@ -17,7 +17,6 @@ export interface Tenant {
   hasLogo?: boolean;
   logoUrl?: string;
   loginEmail?: string;
-  loginPassword?: string;
   profession?: Profession;
   isOnline?: boolean;
   bookingType?: 'queue' | 'appointment';
