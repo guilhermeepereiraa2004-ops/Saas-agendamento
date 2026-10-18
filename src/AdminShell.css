@@ -46,6 +46,17 @@
 .professional-admin .admin-eyebrow { color: #527663 !important; font-size: .6rem; letter-spacing: .14em; font-weight: 700; }
 .professional-admin .topbar-actions { display: flex !important; align-items: center; flex-wrap: wrap; gap: .55rem !important; }
 .professional-admin .admin-header-action { min-height: 46px; padding: .8rem 1rem !important; border-radius: 12px !important; font-size: .75rem; box-shadow: none !important; }
+.professional-admin .admin-customer-link-button { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; min-height: 46px; padding: .7rem .9rem; border: 1px solid #d4e1d9; border-radius: 12px; background: #fff; color: #244e3c; font-size: .73rem; font-weight: 600; white-space: nowrap; }
+.professional-admin .admin-customer-link-button:hover { background: #edf5ef; border-color: #a6c2b0; }
+.professional-admin .admin-customer-link-button svg { flex-shrink: 0; }
+.admin-customer-link-dialog { width: min(460px, calc(100% - 2rem)); max-width: calc(100% - 2rem); margin: auto; padding: 1.4rem; border: 1px solid #d4e1d9; border-radius: 18px; background: #fff; color: #1c302c; box-shadow: 0 20px 80px #10271e33; }
+.admin-customer-link-dialog::backdrop { background: #10271e88; }
+.admin-customer-link-dialog h2 { margin: 0; font-size: 1.1rem; }
+.admin-customer-link-dialog p { margin: .8rem 0 1rem; font-size: .78rem; line-height: 1.7; color: #63716d; }
+.admin-customer-link-dialog label { display: block; margin-bottom: .4rem; font-size: .72rem; font-weight: 600; }
+.admin-customer-link-dialog input { width: 100%; min-width: 0; min-height: 46px; padding: .7rem; border: 1px solid #b7cdbf; border-radius: 10px; background: #f4f7f5; color: #244e3c; font-size: .78rem; }
+.admin-customer-link-dialog form { display: flex; justify-content: flex-end; margin-top: 1rem; }
+.admin-customer-link-dialog button { min-height: 44px; padding: .65rem 1.2rem; border-radius: 10px; background: #173f32; color: #fff; font-size: .78rem; }
 .professional-admin .admin-mode-pill, .professional-admin .subscription-badge { min-height: 32px; background: #f6f8f5 !important; box-shadow: none; font-size: .65rem; }
 .professional-admin .admin-content-scroll { padding: 1.8rem 2rem !important; }
 .professional-admin .admin-kpi-card, .professional-admin .admin-stat-card { min-height: 112px; border-radius: 16px !important; padding: 1.15rem !important; box-shadow: 0 3px 12px #183a2a04 !important; }
@@ -157,6 +168,8 @@
   .professional-admin .admin-mode-pill, .professional-admin .subscription-badge { display: none; }
   .professional-admin .admin-header-action { width: 100%; min-height: 46px; justify-content: center; }
   .professional-admin .admin-header-action svg { width: 17px; }
+  .professional-admin .topbar-actions .admin-customer-link-button { flex: 1 1 130px; }
+  .professional-admin .topbar-actions .admin-header-action { flex: 1 1 145px; width: auto; }
   .professional-admin .admin-hero-stats { grid-template-columns: repeat(3,minmax(0,1fr)) !important; gap: .5rem !important; margin-bottom: 1rem !important; }
   .professional-admin .admin-hero-stats .admin-kpi-card { display: flex !important; flex-direction: column; align-items: flex-start !important; justify-content: flex-start; gap: .25rem !important; min-height: 112px; padding: .85rem .65rem !important; }
   .professional-admin .admin-hero-stats .admin-kpi-icon { display: none; }

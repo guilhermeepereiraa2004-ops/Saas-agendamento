@@ -22,6 +22,7 @@ import { subscriptionBilling } from './lib/subscriptionBilling';
 import { useBillingDay } from './lib/useBillingDay';
 import { useProfessionalPush } from './lib/useProfessionalPush';
 import { ProfessionalPushCard } from './components/ProfessionalPushCard';
+import { CustomerLinkButton } from './components/CustomerLinkButton';
 
 type AdminTab = 'atendimento' | 'agenda' | 'financial' | 'tasks' | 'store' | 'services' | 'scheduling' | 'settings';
 type WorkingHours = NonNullable<Tenant['workingHours']>;
@@ -1875,6 +1876,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
                     <div className={`sub-dot ${billing.status === 'active' ? 'active' : 'warning'}`}></div>
                     <span>{billing.status === 'active' ? 'Plano Ativo' : billing.status === 'trial' ? 'Plano em teste' : billing.label}</span>
                   </div>
+                  <CustomerLinkButton slug={tenant.slug} />
                   {(activeTab === 'atendimento' || activeTab === 'agenda') && (
                     <button 
                       onClick={openAdminAddModal}
