@@ -1,0 +1,88 @@
+.professional-admin .financial-view { min-width: 0; }
+.professional-admin .financial-view .financial-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  gap: 1rem;
+}
+.professional-admin .financial-view .financial-kpis > .admin-kpi-card {
+  container-type: inline-size;
+  min-width: 0;
+  padding: 1rem !important;
+}
+.professional-admin .financial-view .financial-kpis .financial-net-card { grid-column: auto; }
+.professional-admin .financial-kpis .admin-kpi-card > div { min-width: 0; width: 100%; }
+.professional-admin .financial-view .financial-kpis .stat-label {
+  min-height: 2.8em;
+  font-size: .7rem;
+  line-height: 1.4;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.professional-admin .financial-view .financial-kpis .financial-value {
+  display: block;
+  margin: 0;
+  font-size: clamp(1rem, 12cqi, 1.8rem);
+  font-weight: 800;
+  font-family: 'Poppins', sans-serif;
+  line-height: 1.35;
+  letter-spacing: -.035em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+  color: var(--admin-ink);
+}
+.professional-admin .financial-view .financial-kpis small { color: var(--admin-muted); font-size: .65rem; line-height: 1.5; }
+.professional-admin .financial-view .financial-kpis .financial-revenue-value { color: #3274c5; }
+.professional-admin .financial-view .financial-kpis .financial-expense-value { color: var(--admin-danger); }
+.professional-admin .financial-grid > *,
+.professional-admin .financial-toolbar > *,
+.professional-admin .financial-month-row > * { min-width: 0; }
+.financial-month-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+  align-items: start;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid #dce6df;
+  border-radius: 12px;
+  background: #f8faf9;
+}
+.financial-month-description, .financial-expense-description { overflow-wrap: anywhere; }
+.financial-month-amounts { display: grid; gap: .6rem; text-align: right; font-variant-numeric: tabular-nums; }
+.financial-month-net { font-size: 1.15rem; font-weight: 800; overflow-wrap: anywhere; }
+.financial-month-net[data-positive='true'] { color: var(--admin-positive, #16805b); }
+.financial-month-net[data-positive='false'] { color: var(--admin-danger, #c83d44); }
+.financial-month-breakdown { display: grid; gap: .35rem; margin: 0; font-size: .73rem; line-height: 1.6; }
+.financial-month-breakdown > div { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .2rem .65rem; }
+.financial-month-breakdown dt { color: var(--admin-muted); }
+.financial-month-breakdown dd { margin: 0; overflow-wrap: anywhere; font-weight: 600; }
+.financial-expense-controls { display: flex; flex: 1 1 200px; gap: 10px; min-width: 0; }
+.financial-expense-controls input { width: 0; }
+.financial-expense-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: .75rem;
+  padding: 1rem;
+  border: 1px solid #f2d9d9;
+  border-radius: 12px;
+  background: #fff8f7;
+}
+.financial-expense-actions { display: flex; align-items: center; justify-content: space-between; gap: .75rem; min-width: 0; }
+.financial-expense-actions > div { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.financial-expense-actions button { display: grid; place-items: center; flex-shrink: 0; min-width: 44px; min-height: 44px; }
+@media (max-width: 1250px) {
+  .professional-admin .financial-view .financial-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+}
+@media (max-width: 600px) {
+  .professional-admin .financial-view .financial-kpis { gap: .7rem; }
+  .professional-admin .financial-view .financial-kpis > .admin-kpi-card { padding: .85rem !important; }
+  .financial-month-row, .financial-expense-row { grid-template-columns: minmax(0, 1fr); }
+  .financial-month-amounts { text-align: left; border-top: 1px solid #e2e9e4; padding-top: .75rem; }
+  .financial-month-breakdown > div { justify-content: space-between; }
+  .financial-grid h3 { overflow-wrap: anywhere; }
+}
+@media (max-width: 360px) {
+  .professional-admin .financial-view .financial-kpis { grid-template-columns: minmax(0, 1fr) !important; }
+  .financial-expense-controls { flex-wrap: wrap; }
+  .financial-expense-controls .btn-submit { width: 100% !important; min-height: 44px; }
+}

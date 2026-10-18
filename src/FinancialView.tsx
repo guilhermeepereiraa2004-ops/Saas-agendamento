@@ -248,11 +248,11 @@ export default function FinancialView({ tenantId }: Props) {
       </div>
 
       {/* Stats Summary */}
-      <div className="admin-stats-row admin-hero-stats financial-kpis">
+      <div className="admin-stats-row financial-kpis">
         <div className="admin-stat-card admin-kpi-card financial-net-card">
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             <div className="stat-label">Saldo líquido no mês</div>
-            <div className="stat-value" data-positive={monthNet >= 0}>
+            <div className="stat-value financial-value" data-positive={monthNet >= 0}>
               {formatCurrency(monthNet)}
             </div>
             <small>Receitas menos despesas</small>
@@ -264,9 +264,10 @@ export default function FinancialView({ tenantId }: Props) {
             <div className="stat-label">
               Faturamento Hoje
             </div>
-            <div style={{ fontSize: '1.8rem', fontWeight: 900, color: 'var(--text-primary)' }}>
+            <div className="financial-value">
               {formatCurrency(todayTotal)}
             </div>
+            <small>Atendimentos de hoje</small>
           </div>
         </div>
 
@@ -275,9 +276,10 @@ export default function FinancialView({ tenantId }: Props) {
             <div className="stat-label">
               Faturamento Mensal
             </div>
-            <div style={{ fontSize: '1.8rem', fontWeight: 900, color: '#3b82f6' }}>
+            <div className="financial-value financial-revenue-value">
               {formatCurrency(monthRevenue)}
             </div>
+            <small>Entradas no mês</small>
           </div>
         </div>
 
@@ -286,9 +288,10 @@ export default function FinancialView({ tenantId }: Props) {
             <div className="stat-label">
               Saídas Mensais
             </div>
-            <div style={{ fontSize: '1.8rem', fontWeight: 900, color: 'var(--danger)' }}>
+            <div className="financial-value financial-expense-value">
               {formatCurrency(monthExpenses)}
             </div>
+            <small>Despesas no mês</small>
           </div>
         </div>
 
@@ -311,22 +314,17 @@ export default function FinancialView({ tenantId }: Props) {
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               {months.map(([key, data]) => (
-                <div key={key} style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  padding: '1rem',
-                  background: 'var(--bg-base)',
-                  borderRadius: '12px',
-                  border: '1px solid color-mix(in srgb, var(--accent-primary) 10%, #e2e8f0)',
-                }}>
-                  <div>
+                <div key={key} className="financial-month-row">
+                  <div className="financial-month-description">
                     <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{formatMonth(key)}</div>
-                    <div style={{ fontSize: '0.8rem', color: '#64748b' }}>{data.count} atendimentos</div>
+                    <div style={{ fontSize: '0.8rem', color: '#64748b' }}>{data.count} {data.count === 1 ? 'atendimento' : 'atendimentos'}</div>
                   </div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--success)' }}>
-                    <div>{formatCurrency(data.revenue - data.expenses)}</div>
-                    <small>{formatCurrency(data.revenue)} entradas · {formatCurrency(data.expenses)} saídas</small>
+                  <div className="financial-month-amounts">
+                    <strong className="financial-month-net" data-positive={data.revenue >= data.expenses}>{formatCurrency(data.revenue - data.expenses)}</strong>
+                    <dl className="financial-month-breakdown">
+                      <div><dt>Entradas</dt><dd>{formatCurrency(data.revenue)}</dd></div>
+                      <div><dt>Saídas</dt><dd>{formatCurrency(data.expenses)}</dd></div>
+                    </dl>
                   </div>
                 </div>
               ))}
@@ -352,7 +350,7 @@ export default function FinancialView({ tenantId }: Props) {
                 onChange={e => setExpenseDescription(e.target.value)}
                 style={{ flex: '1 1 200px' }}
               />
-              <div style={{ display: 'flex', gap: '10px', flex: '1 1 200px' }}>
+              <div className="financial-expense-controls">
                 <input 
                   type="text" 
                   inputMode="decimal"
@@ -371,12 +369,12 @@ export default function FinancialView({ tenantId }: Props) {
               <p style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>Nenhuma saída registrada neste mês.</p>
             ) : (
               selectedExpenses.map(exp => (
-                <div key={exp.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', background: 'color-mix(in srgb, var(--danger) 5%, var(--bg-surface))', border: '1px solid color-mix(in srgb, var(--danger) 15%, #fee2e2)', borderRadius: '12px' }}>
-                  <div>
+                <div key={exp.id} className="financial-expense-row">
+                  <div className="financial-expense-description">
                     <div style={{ fontWeight: 600, color: '#991b1b' }}>{exp.description}</div>
                     <div style={{ fontSize: '0.75rem', color: '#b91c1c' }}>{new Date(exp.created_at).toLocaleDateString('pt-BR')}</div>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                  <div className="financial-expense-actions">
                     <div style={{ fontWeight: 800, color: 'var(--danger)' }}>-{formatCurrency(exp.amount)}</div>
                     <button onClick={() => { if (window.confirm(`Excluir a saída “${exp.description}”?`)) handleDeleteExpense(exp.id); }} style={{ background: 'transparent', color: 'var(--danger)', padding: '5px' }} aria-label={`Excluir saída ${exp.description}`}>
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>

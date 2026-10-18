@@ -482,6 +482,30 @@ try {
     await new Promise(resolve => setTimeout(resolve, 300)); assert.equal(f.db.tenant_products.length, 0, 'Produto gravado com nome vazio após trim');
   });
   const financialTables = { financial_records: [{ id: 'f1', tenant_id: tenantId, price: '100.50', completed_at: now }, { id: 'f2', tenant_id: tenantId, price: '49.50', completed_at: now }, { id: 'f3', tenant_id: tenantId, price: '60', completed_at: '2026-09-30T12:00:00-03:00' }], tenant_expenses: [{ id: 'e1', tenant_id: tenantId, amount: '25', description: 'Material QA', created_at: now }] };
+  for(const width of [320,390,768,1024,1440])await test(`Financeiro visual: valores completos e histórico sem sobreposição em ${width}px`, {width,standalone:true,push:'enabled',tables:{
+    financial_records:[{id:'large',tenant_id:tenantId,price:'1234567.89',completed_at:now},{id:'older',tenant_id:tenantId,price:'100',completed_at:'2026-09-30T12:00:00-03:00'}],
+    tenant_expenses:[{id:'long',tenant_id:tenantId,amount:'23456.78',description:'Reposição de materiais e manutenção do estabelecimento com descrição extensa',created_at:now}],
+  }}, async f=>{
+    await f.nav('Financeiro');await visible(f.page.getByRole('heading',{name:'Resumo financeiro'}));
+    await f.page.evaluate(()=>document.fonts.ready);await noOverflow(f);
+    const issues=await f.page.locator('.financial-kpis .financial-value').evaluateAll(elements=>elements.flatMap(element=>{
+      const card=element.closest('.admin-kpi-card').getBoundingClientRect();
+      const range=document.createRange();range.selectNodeContents(element);
+      return [...range.getClientRects()].filter(r=>r.left<card.left||r.right>card.right||r.top<card.top||r.bottom>card.bottom).map(()=>element.textContent);
+    }));
+    assert.deepEqual(issues,[],'Valores financeiros cortados pelo cartão');
+    assert.equal(await f.page.locator('.financial-kpis').evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length),width<=360?1:width<=1250?2:4);
+    const overlap=await f.page.locator('.financial-month-row').evaluateAll(rows=>rows.some(row=>{
+      const a=row.querySelector('.financial-month-description').getBoundingClientRect();
+      const b=row.querySelector('.financial-month-amounts').getBoundingClientRect();
+      return a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top;
+    }));
+    assert.equal(overlap,false,'Mês e valores se sobrepõem');
+    if(width===390||width===1440)await f.page.screenshot({path:fileURLToPath(new URL(`financeiro-corrigido-${width}.png`,output)),animations:'disabled'});
+    await f.page.getByRole('button',{name:/Excluir saída Reposição/}).scrollIntoViewIfNeeded();await noOverflow(f);
+    if(width===390)await f.page.screenshot({path:fileURLToPath(new URL('financeiro-historico-corrigido-390.png',output)),animations:'disabled'});
+    assert.equal(f.requests.some(r=>r.table==='record_expense'),false);
+  });
   await test('Financeiro: receitas, despesas, saldo e filtro mensal', { tables: financialTables }, async f => {
     await f.nav('Financeiro'); await visible(f.page.getByRole('heading', { name: 'Resumo financeiro' }));
     const kpi = label => f.page.locator('.financial-kpis .admin-kpi-card').filter({ hasText: label });
