@@ -104,6 +104,10 @@ O botão **Instalar app** aparece na página do cliente; **Instalar app profissi
 
 O PWA geral anterior tem identidade `/`, preservada explicitamente no manifesto estático. Ele não é convertido automaticamente em um dos novos apps. Para usar uma instalação específica, instale pelo botão da página correspondente. Testes: `npm run test:pwa` para o endpoint e a auditoria `scratch/admin-audit/run.mjs` para os fluxos simulados de Android, iOS, autenticação e responsividade. A conclusão da instalação e as notificações no aparelho exigem teste em dispositivo real.
 
+## Situação da mensalidade
+
+Planos pendentes usam a data de vencimento para distinguir **a vencer**, **vence hoje** e **atrasado**. Datas são comparadas como dias do calendário local, sem converter o vencimento para outro dia por UTC. O dia do vencimento inteiro ainda é considerado no prazo; ausência de data válida não comprova atraso. O aviso profissional, os cartões, filtros e a contagem de inadimplentes do master usam a mesma regra. Planos confirmados como ativos e períodos de teste mantêm seu estado. A apresentação não grava status, receitas ou pagamentos no banco; a data local é revista a cada minuto e ao retornar ao painel. Testes: `npm run test:billing`.
+
 ## Ícones do site e PWA
 
 Favicon, ícones de instalação e Apple Touch Icon usam o mesmo símbolo do componente `BrandMark`, com as cores de `src/brand.css`. Os PNGs têm dimensões reais de 192 e 512 pixels, o ícone Apple tem 180 pixels e o ICO inclui 16, 32 e 48 pixels. As versões maskable têm fundo opaco e mantêm o símbolo na área segura para recortes do sistema.

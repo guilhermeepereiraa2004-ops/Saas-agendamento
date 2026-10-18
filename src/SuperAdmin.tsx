@@ -9,6 +9,8 @@ import { authorizationHeaders } from './lib/access';
 import { TENANT_FIELDS } from './lib/tenantData';
 import { validBilling } from './lib/validation';
 import { useAdminDrawer } from './lib/useAdminDrawer';
+import { subscriptionBilling } from './lib/subscriptionBilling';
+import { useBillingDay } from './lib/useBillingDay';
 
 interface TenantDraft {
   name: string;
@@ -30,6 +32,8 @@ interface TenantDraft {
 
 export default function SuperAdmin() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
+  const billingToday = useBillingDay();
+  const billingTenants = tenants.map(tenant => ({ ...tenant, billing: subscriptionBilling(tenant, billingToday) }));
   const [showForm, setShowForm] = useState(false);
   
   const [editingTenantId, setEditingTenantId] = useState<string | null>(null);
@@ -620,7 +624,7 @@ export default function SuperAdmin() {
                     <button className="btn-premium btn-premium-primary" style={{ marginTop: '2rem', marginInline: 'auto' }} onClick={() => setShowForm(true)}>+ Criar Primeiro Cadastro</button>
                   </div>
                 ) : (
-                  tenants.map(tenant => (
+                  billingTenants.map(tenant => (
                     <div key={tenant.id} className="premium-card">
                       <div className="card-header">
                         <div>
@@ -631,12 +635,11 @@ export default function SuperAdmin() {
                           </div>
                         </div>
                         <div className={`card-badge ${tenant.subscriptionStatus === 'active' ? 'status-badge serving' : 'status-badge'}`} style={{ 
-                          background: tenant.subscriptionStatus === 'active' ? 'rgba(16,185,129,0.1)' : 'rgba(239, 68, 68, 0.1)',
-                          color: tenant.subscriptionStatus === 'active' ? '#10b981' : '#ef4444',
+                          ...tenant.billing.palette,
                           border: 'none',
                           padding: '6px 12px'
                         }}>
-                          {tenant.subscriptionStatus === 'active' ? 'Ativo' : 'Pendente'}
+                          {tenant.billing.label}
                         </div>
                       </div>
                       
@@ -800,7 +803,7 @@ export default function SuperAdmin() {
                 </div>
                 <div className="stat-info">
                   <span className="stat-label">Inadimplentes</span>
-                  <span className="stat-value">{tenants.filter(t => t.subscriptionStatus === 'overdue').length}</span>
+                  <span className="stat-value">{billingTenants.filter(t => t.billing.status === 'overdue').length}</span>
                 </div>
               </div>
             </div>
@@ -817,9 +820,9 @@ export default function SuperAdmin() {
                   </tr>
                 </thead>
                 <tbody>
-                  {tenants.filter(t => {
+                  {billingTenants.filter(t => {
                     const matchesSearch = t.name.toLowerCase().includes(financialSearch.toLowerCase());
-                    const matchesStatus = financialFilter === 'all' || t.subscriptionStatus === financialFilter;
+                    const matchesStatus = financialFilter === 'all' || t.billing.status === financialFilter;
                     return matchesSearch && matchesStatus;
                   }).map(tenant => (
                     <tr key={tenant.id}>
@@ -849,18 +852,9 @@ export default function SuperAdmin() {
                           fontSize: '0.7rem', 
                           fontWeight: 800,
                           textTransform: 'uppercase',
-                          background: 
-                            tenant.subscriptionStatus === 'active' ? '#dcfce7' :
-                            tenant.subscriptionStatus === 'overdue' ? '#fee2e2' :
-                            tenant.subscriptionStatus === 'trial' ? '#fef3c7' : '#f1f5f9',
-                          color: 
-                            tenant.subscriptionStatus === 'active' ? '#166534' :
-                            tenant.subscriptionStatus === 'overdue' ? '#991b1b' :
-                            tenant.subscriptionStatus === 'trial' ? '#854d0e' : '#334155'
+                          ...tenant.billing.palette,
                         }}>
-                          {tenant.subscriptionStatus === 'active' ? 'Em dia' : 
-                           tenant.subscriptionStatus === 'overdue' ? 'Atrasado' : 
-                           tenant.subscriptionStatus === 'trial' ? 'Teste' : 'Pendente'}
+                          {tenant.billing.label}
                         </span>
                       </td>
                       <td data-label="Ações" style={{ textAlign: 'right' }}>

@@ -169,3 +169,16 @@
 @media (prefers-reduced-motion: reduce) {
   .professional-admin *, .master-admin * { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+.professional-admin .payment-alert-banner.billing-pending {
+  background: #fff8e8 !important;
+  color: #674d17;
+  border-color: #ead7a0;
+  box-shadow: none;
+}
+.professional-admin .billing-pending .alert-icon-pulse {
+  background: #f7ebcd;
+  animation: none;
+  flex-shrink: 0;
+}
+.professional-admin .billing-pending .btn-pay-now { background: #fff; color: #674d17; border: 1px solid #dfca94; }
+.professional-admin .billing-pending code { background: #f3e7cb !important; }

@@ -553,8 +553,44 @@ try {
     await monday.getByRole('button', { name: 'Aplicar a todos', exact: true }).click(); await wait(() => f.db.tenants[0].working_hours.every(h => h.start === '09:00'));
   });
   await test('Adicional: vencimento no aviso de pagamento usa a data local correta', { tenant: { subscription_status: 'overdue', next_payment_at: '2026-10-17T03:00:00Z' } }, async f => {
-    await visible(f.page.locator('.payment-alert-banner')); await wait(async () => (await f.page.locator('.payment-alert-banner').innerText()).includes('mensalidade venceu'));
+    await visible(f.page.locator('.payment-alert-banner')); await wait(async () => (await f.page.locator('.payment-alert-banner').innerText()).includes('mensalidade vence hoje'));
     assert.match(await f.page.locator('.payment-alert-banner').innerText(), /17\/10\/2026/, 'Vencimento é exibido um dia antes no fuso America/Bahia');
+  });
+  for (const width of [390,1440]) for (const subscription_status of ['pending','overdue']) await test(`Cobrança: vencimento futuro em 28/10 não é atraso mesmo com status ${subscription_status} em ${width}px`, {width,tenant:{subscription_status,next_payment_at:'2026-10-28T00:00:00Z'}}, async f => {
+    const banner=f.page.locator('.payment-alert-banner');await visible(banner);
+    assert.match(await banner.innerText(),/Sua mensalidade vence em 28\/10\/2026/);
+    assert.doesNotMatch(await banner.innerText(),/venceu|suspensão|atraso/i);
+    assert.match(await banner.getAttribute('class'),/billing-pending/);
+    assert.equal(await f.page.getByText('A vencer',{exact:true}).textContent(),'A vencer');await noOverflow(f);
+    assert.equal(f.requests.some(r=>r.method==='PATCH'&&r.table==='tenants'),false);
+    if(subscription_status==='overdue') await f.page.screenshot({path:fileURLToPath(new URL(`billing-futuro-${width}.png`,output)),animations:'disabled'});
+  });
+  await test('Cobrança: painel aberto atualiza o vencimento ao voltar após meia-noite', {tenant:{subscription_status:'pending',next_payment_at:'2026-10-17T00:00:00Z'}}, async f => {
+    await visible(f.page.getByText('Sua mensalidade vence hoje',{exact:true}));
+    await f.page.clock.setFixedTime(new Date('2026-10-18T00:01:00-03:00'));
+    await f.page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+    await visible(f.page.getByText('Atenção: Pagamento em atraso',{exact:true}));
+    assert.match(await f.page.locator('.payment-alert-banner').innerText(),/venceu em 17\/10\/2026/);
+  });
+  await test('Cobrança: pagamento pendente com data passada é exibido como atraso', {tenant:{subscription_status:'pending',next_payment_at:'2026-10-16T00:00:00Z'}}, async f => {
+    const banner=f.page.locator('.payment-alert-banner');await visible(banner);
+    assert.match(await banner.innerText(),/venceu em 16\/10\/2026/);assert.match(await banner.getAttribute('class'),/billing-overdue/);
+    await visible(f.page.getByText('Atrasado',{exact:true}));
+  });
+  await test('Cobrança: ausência de data não afirma vencimento nem suspensão', {tenant:{subscription_status:'overdue',next_payment_at:null}}, async f => {
+    const banner=f.page.locator('.payment-alert-banner');await visible(banner);
+    assert.match(await banner.innerText(),/está pendente de pagamento/);assert.doesNotMatch(await banner.innerText(),/venceu|suspensão|atraso/i);
+  });
+  await test('Cobrança: plano ativo com vencimento antigo não ganha cobrança indevida', {tenant:{subscription_status:'active',next_payment_at:'2026-10-01T00:00:00Z'}}, async f => {
+    await visible(f.page.getByText('Plano Ativo',{exact:true}));assert.equal(await f.page.locator('.payment-alert-banner').count(),0);
+  });
+  await test('Cobrança: master conta e filtra atrasos pela data, preservando cadastros', {master:true,tables:{tenants:[{...base,subscription_status:'overdue',next_payment_at:'2026-10-28T00:00:00Z'},{...base,id:'past',slug:'past',name:'Vencido QA',subscription_status:'pending',next_payment_at:'2026-10-16T00:00:00Z'}]}}, async f => {
+    await f.nav('SaaS Financeiro');
+    const overdue=f.page.locator('.stat-card').filter({has:f.page.getByText('Inadimplentes',{exact:true})});
+    assert.equal(await overdue.locator('.stat-value').innerText(),'1');
+    await f.page.locator('select').first().selectOption('overdue');assert.equal(await f.page.locator('tbody tr').count(),1);assert.match(await f.page.locator('tbody').innerText(),/Vencido QA/);
+    await f.page.locator('select').first().selectOption('pending');assert.equal(await f.page.locator('tbody tr').count(),1);assert.match(await f.page.locator('tbody').innerText(),/Barbearia QA/);assert.match(await f.page.locator('tbody').innerText(),/A vencer/i);
+    assert.equal(f.requests.some(r=>r.method==='PATCH'&&r.table==='tenants'),false);
   });
   await test('Adicional: aviso permite copiar chave PIX sem enviar comprovante', { tenant: { subscription_status: 'overdue' } }, async f => {
     await f.page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { value: { writeText: async value => { window.__qaClipboard = value; } }, configurable: true }));

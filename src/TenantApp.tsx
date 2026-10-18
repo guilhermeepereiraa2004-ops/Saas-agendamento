@@ -18,6 +18,8 @@ import { mapTenant, TENANT_FIELDS } from './lib/tenantData';
 import { validWorkingHours, formatCalendarDate } from './lib/validation';
 import { InstallAppCard } from './components/InstallAppCard';
 import { tenantAppPath, type AppAudience } from './lib/pwa';
+import { subscriptionBilling } from './lib/subscriptionBilling';
+import { useBillingDay } from './lib/useBillingDay';
 
 type AdminTab = 'atendimento' | 'agenda' | 'financial' | 'tasks' | 'store' | 'services' | 'scheduling' | 'settings';
 type WorkingHours = NonNullable<Tenant['workingHours']>;
@@ -146,6 +148,8 @@ function AdminNavIcon({ tab }: { tab: AdminTab }) {
 export default function TenantApp({ tenant: initialTenant, audience }: { tenant: Tenant; audience?: AppAudience }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [tenant, setTenant] = useState<Tenant>(initialTenant);
+  const billingToday = useBillingDay();
+  const billing = subscriptionBilling(tenant, billingToday);
   const { showToast } = useToasts();
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const prevQueueRef = useRef<QueueItem[]>([]);
@@ -1713,21 +1717,21 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
           {/* MAIN CONTENT */}
           <main className="admin-main-content">
             {/* Payment Alert Banner */}
-            {(tenant.subscriptionStatus === 'pending' || tenant.subscriptionStatus === 'overdue') && (
-              <div className="payment-alert-banner fade-in">
+            {billing.needsPayment && (
+              <div className={`payment-alert-banner billing-${billing.status} fade-in`} role="status">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                   <div className="alert-icon-pulse">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
                   </div>
                   <div>
-                    <strong style={{ display: 'block', fontSize: '0.95rem' }}>Atenção: Pagamento Pendente</strong>
+                    <strong style={{ display: 'block', fontSize: '0.95rem' }}>{billing.status === 'overdue' ? 'Atenção: Pagamento em atraso' : billing.timing === 'today' ? 'Sua mensalidade vence hoje' : billing.timing === 'future' ? 'Próximo vencimento' : 'Pagamento pendente'}</strong>
                     <p style={{ margin: '2px 0 0 0', fontSize: '0.85rem', opacity: 0.9 }}>
-                      {tenant.nextPaymentAt ? (
-                        <>Sua mensalidade venceu em <strong>{formatCalendarDate(tenant.nextPaymentAt)}</strong>.</>
+                      {billing.dueDate ? (
+                        <>Sua mensalidade {billing.timing === 'past' ? 'venceu em' : billing.timing === 'today' ? 'vence hoje,' : 'vence em'} <strong>{formatCalendarDate(billing.dueDate)}</strong>.</>
                       ) : (
                         <>Sua mensalidade está pendente de pagamento.</>
                       )}
-                      {" "}Realize o pagamento para evitar a suspensão dos serviços.
+                      {billing.status === 'overdue' ? ' Realize o pagamento para regularizar sua assinatura.' : ' Se já pagou, envie o comprovante para conferência.'}
                     </p>
                     {adminPixKey && (
                       <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -1746,7 +1750,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
                               navigator.clipboard.writeText(adminPixKey);
                               showToast('Chave PIX copiada!', 'success');
                             }}
-                            style={{ background: 'transparent', border: 'none', color: 'white', cursor: 'pointer', padding: '4px' }}
+                            style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', padding: '4px' }}
                             title="Copiar PIX"
                           >
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
@@ -1794,8 +1798,8 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
                     )}
                   </div>
                   <div className="subscription-badge">
-                    <div className={`sub-dot ${tenant.subscriptionStatus === 'active' ? 'active' : 'warning'}`}></div>
-                    <span>Plano {tenant.subscriptionStatus === 'active' ? 'Ativo' : 'Pendente'}</span>
+                    <div className={`sub-dot ${billing.status === 'active' ? 'active' : 'warning'}`}></div>
+                    <span>{billing.status === 'active' ? 'Plano Ativo' : billing.status === 'trial' ? 'Plano em teste' : billing.label}</span>
                   </div>
                   {(activeTab === 'atendimento' || activeTab === 'agenda') && (
                     <button 
