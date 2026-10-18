@@ -31,13 +31,17 @@ async function wait(check, message = 'State did not update', ms = 7500) {
 }
 async function visible(locator) { await locator.waitFor({ state: 'visible' }); }
 const field = (page, text) => page.locator('.form-group').filter({ has: page.locator('label').filter({ hasText: new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }) }).first().locator('input, select').first();
-async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, forged = false, master = false, delay = 0, push = 'unsupported', permissionChoice = 'granted' } = {}) {
+async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, forged = false, master = false, delay = 0, push = 'unsupported', permissionChoice = 'granted', path, userAgent, standalone = false } = {}) {
   const db = {
     tenants: [structuredClone({ ...base, ...tenant })], queue_items: [], tenant_tasks: [], tenant_products: [], tenant_expenses: [], financial_records: [],
     platform_settings: [{ id: 'settings', pix_key: 'fixture-key', pix_name: 'QA beneficiary' }], ...structuredClone(tables),
   };
   const requests = []; const exceptions = []; const faults = [];
-  const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'America/Bahia', serviceWorkers: 'block' });
+  const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'America/Bahia', serviceWorkers: 'block', ...(userAgent ? {userAgent} : {}) });
+  if (standalone) await context.addInitScript(() => {
+    const original = window.matchMedia.bind(window);
+    window.matchMedia = query => query === '(display-mode: standalone)' ? Object.defineProperty(original(query), 'matches', {value:true}) : original(query);
+  });
   const user = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', email: base.login_email, aud: 'authenticated', role: 'authenticated' };
   const session = { access_token: 'qa-verified-token', refresh_token: 'qa-refresh-token', expires_at: 9999999999, expires_in: 3600, token_type: 'bearer', user };
   await context.addInitScript(({ auth, forged, master, session, push, permissionChoice }) => {
@@ -158,10 +162,14 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
       return send({ Key: url.pathname.replace('/storage/v1/object/', ''), Id: 'qa-file' });
     }
     if (url.pathname === '/api/send-push') { requests.push({ table: 'push', method, body: request.postDataJSON() }); return send({ sent: false, reason: 'isolated_audit' }); }
+    if (url.pathname === '/api/pwa-manifest') {
+      const audience = url.searchParams.get('audience'); const segment = audience === 'professional' ? 'profissional' : 'cliente';
+      return send({id:`/apps/${tenantId}/${audience}`,name:'Barbearia QA',start_url:`/qa/${segment}/`,scope:`/qa/${segment}/`,display:'standalone',icons:[{src:'/icons/suavez-v2-192.png',sizes:'192x192',type:'image/png'},{src:'/icons/suavez-v2-512.png',sizes:'512x512',type:'image/png'}]});
+    }
     if (url.hostname === 'admin-audit.test') {
-      const asset = url.pathname.startsWith('/assets/') ? url.pathname.slice(1) : 'index.html';
+      const asset = url.pathname.startsWith('/assets/') || url.pathname.startsWith('/icons/') || url.pathname === '/pwa-bootstrap.js' ? url.pathname.slice(1) : 'index.html';
       const body = await readFile(new URL(`../../dist/${asset}`, import.meta.url));
-      return route.fulfill({ status: 200, contentType: asset.endsWith('.js') ? 'application/javascript' : asset.endsWith('.css') ? 'text/css' : 'text/html', body });
+      return route.fulfill({ status: 200, contentType: asset.endsWith('.js') ? 'application/javascript' : asset.endsWith('.css') ? 'text/css' : asset.endsWith('.png') ? 'image/png' : 'text/html', body });
     }
     if(process.env.AUDIT_FONTS==='1' && ['fonts.googleapis.com','fonts.gstatic.com'].includes(url.hostname)) return route.continue();
     return route.abort();
@@ -172,8 +180,9 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
   await page.clock.install({ time: new Date(now) });
   page.on('pageerror', error => exceptions.push(error.message));
   page.on('dialog', dialog => dialog.accept());
-  await page.goto(`https://admin-audit.test/${master ? 'admin' : 'qa'}`);
-  await visible(page.locator(auth ? master ? '.admin-layout' : '.professional-admin' : master ? '.master-login' : '.customer-app').first());
+  await page.goto(`https://admin-audit.test${path || `/${master ? 'admin' : 'qa'}`}`);
+  if (!path && !master) await page.waitForURL(/\/qa\/(cliente|profissional)\/$/);
+  await visible(page.locator(path?.includes('/cliente') ? '.customer-app' : !auth && path?.includes('/profissional') ? '.tenant-login' : auth ? master ? '.admin-layout' : '.professional-admin' : master ? '.master-login' : '.customer-app').first());
   const nav = async name => {
     const sidebar = page.locator(master ? '.sidebar-nav' : '.admin-sidebar');
     if (width < (master ? 1024 : 1021)) {
@@ -216,6 +225,86 @@ async function noOverflow(f) {
 }
 
 try {
+  const iphoneUA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1';
+  const androidUA = 'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36';
+  async function promptEvent(f, outcome = 'accepted') {
+    await f.page.evaluate(outcome => {
+      window.__installCalls = 0;
+      const event = new Event('beforeinstallprompt', {cancelable:true});
+      Object.assign(event, {prompt:async () => { window.__installCalls++; if(outcome==='error') throw new Error('QA install error'); },userChoice:Promise.resolve({outcome})});
+      window.dispatchEvent(event);
+    }, outcome);
+  }
+  await test('PWA: cliente permanece cliente mesmo com sessão master neste navegador', {path:'/qa/cliente/',master:true,width:390}, async f => {
+    await visible(f.page.locator('.customer-hero'));
+    assert.equal(await f.page.locator('.professional-admin').count(),0);
+    assert.equal(f.requests.some(r=>['financial_records','tenant_tasks','staff_access'].includes(r.table)),false);
+    assert.match(await f.page.locator('link[rel="manifest"]').getAttribute('href'),/audience=customer/);
+    await noOverflow(f);
+    await f.page.screenshot({path:fileURLToPath(new URL('pwa-cliente-mobile.png',output)),animations:'disabled'});
+  });
+  await test('PWA: profissional abre login próprio e não consulta dados privados sem sessão', {path:'/qa/profissional/',auth:false,width:390}, async f => {
+    await visible(f.page.getByRole('heading',{name:'Bom ter você de volta.'}));
+    assert.equal(await f.page.locator('.customer-app').isVisible(),false);
+    assert.equal(f.requests.some(r=>['financial_records','tenant_tasks'].includes(r.table)),false);
+    await f.page.keyboard.press('Escape');await visible(f.page.locator('.tenant-login'));
+    await f.page.reload();await visible(f.page.locator('.tenant-login'));
+    assert.match(await f.page.locator('link[rel="manifest"]').getAttribute('href'),/audience=professional/);
+  });
+  await test('PWA: profissional restaura painel e volta ao login ao sair', {path:'/qa/profissional/'}, async f => {
+    await visible(f.page.locator('.professional-admin'));await f.page.reload();await visible(f.page.locator('.professional-admin'));
+    await f.page.getByRole('button',{name:'Sair do Painel'}).click();await visible(f.page.locator('.tenant-login'));
+    await f.page.reload();await visible(f.page.locator('.tenant-login'));
+  });
+  await test('PWA: instalação do cliente no endereço antigo leva à entrada correta', {auth:false,width:390}, async f => {
+    await f.page.getByRole('button',{name:'Instalar app',exact:true}).click();
+    await visible(f.page.getByRole('dialog',{name:'Barbearia QA no seu celular'}));
+    assert.equal(new URL(f.page.url()).pathname,'/qa/cliente/');assert.equal(new URL(f.page.url()).search,'');
+    await noOverflow(f);
+  });
+  await test('PWA: instalação profissional no endereço antigo usa app próprio', {}, async f => {
+    await f.page.getByRole('button',{name:'Instalar app profissional'}).click();
+    await visible(f.page.getByRole('dialog',{name:'Barbearia QA no seu celular'}));
+    assert.equal(new URL(f.page.url()).pathname,'/qa/profissional/');
+    assert.match(await f.page.locator('link[rel="manifest"]').getAttribute('href'),/audience=professional/);
+  });
+  await test('PWA: Android abre confirmação nativa só no clique e não anuncia conclusão', {path:'/qa/cliente/',auth:false,width:390,userAgent:androidUA}, async f => {
+    await promptEvent(f);assert.equal(await f.page.evaluate(()=>window.__installCalls),0);
+    await f.page.getByRole('button',{name:'Instalar app',exact:true}).click();
+    await visible(f.page.getByRole('dialog'));await visible(f.page.getByText(/Pedido enviado ao navegador/));
+    assert.equal(await f.page.evaluate(()=>window.__installCalls),1);
+    assert.equal(await f.page.getByText(/instalação concluída|instalado com sucesso/i).count(),0);
+    await f.page.getByRole('button',{name:'Entendi',exact:true}).click();
+    await visible(f.page.getByRole('button',{name:'Ver orientação'}));
+  });
+  await test('PWA: dispensar confirmação e falha nativa oferecem alternativa', {path:'/qa/profissional/',width:390,userAgent:androidUA}, async f => {
+    await promptEvent(f,'dismissed');await f.page.getByRole('button',{name:'Instalar app profissional'}).click();
+    await visible(f.page.getByText('Você pode instalar quando quiser pelo menu do navegador.'));
+    await f.page.getByRole('button',{name:'Entendi',exact:true}).click();
+    await promptEvent(f,'error');await f.page.getByRole('button',{name:'Instalar app profissional'}).click();
+    await visible(f.page.getByText('Não foi possível abrir a instalação. Tente pelo menu do navegador.'));
+  });
+  await test('PWA: iPhone mostra passos Safari e diálogo mantém foco e fecha', {path:'/qa/cliente/',auth:false,width:390,userAgent:iphoneUA}, async f => {
+    await f.page.getByRole('button',{name:'Instalar app',exact:true}).click();
+    const dialog=f.page.getByRole('dialog');await visible(dialog);
+    await visible(dialog.getByText('Adicionar à Tela de Início',{exact:true}));
+    assert.equal(await dialog.getByRole('button',{name:'Instalar agora'}).count(),0);
+    await f.page.keyboard.press('Tab');assert.equal(await f.page.evaluate(()=>Boolean(document.activeElement.closest('dialog'))),true);
+    await noOverflow(f);await f.page.screenshot({path:fileURLToPath(new URL('pwa-ios-orientacao.png',output)),animations:'disabled'});
+    await f.page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
+    assert.equal(await f.page.getByRole('button',{name:'Instalar app',exact:true}).evaluate(el=>el===document.activeElement),true);
+  });
+  await test('PWA: navegador interno no iPhone orienta abrir no Safari', {path:'/qa/cliente/',auth:false,width:320,userAgent:iphoneUA+' Instagram 300'}, async f => {
+    await f.page.getByRole('button',{name:'Instalar app',exact:true}).click();
+    await visible(f.page.getByText('Para seguir estas instruções, abra este endereço no Safari.'));await noOverflow(f);
+  });
+  for(const audience of ['cliente','profissional']) await test(`PWA: instalado em modo standalone esconde convite ${audience}`, {path:`/qa/${audience}/`,auth:audience==='profissional',standalone:true,width:390}, async f => {
+    assert.equal(await f.page.locator('.install-app-card').count(),0);
+  });
+  await test('PWA: painel profissional desktop oferece instalação sem perder ações', {path:'/qa/profissional/',width:1440,push:'enabled'}, async f => {
+    await visible(f.page.getByRole('button',{name:'Instalar app profissional'}));await noOverflow(f);
+    await f.page.screenshot({path:fileURLToPath(new URL('pwa-profissional-desktop.png',output)),animations:'disabled'});
+  });
   await test('Login profissional: rejeita senha errada, aceita correta, persiste e sai', { auth: false }, async f => {
     await f.page.getByRole('button', { name: 'Acessar área profissional' }).click();
     await f.page.locator('#professional-email').fill(base.login_email);
@@ -226,7 +315,7 @@ try {
     await f.page.locator('.login-btn').click();
     await visible(f.page.locator('.professional-admin'));
     await f.page.reload(); await visible(f.page.locator('.professional-admin'));
-    await f.page.locator('.btn-logout').click(); await visible(f.page.locator('.customer-app'));
+    await f.page.locator('.btn-logout').click(); await visible(f.page.locator('.tenant-login'));
     assert.equal(await f.page.evaluate(() => localStorage.getItem('suavez_auth_qa')), null);
   });
   await test('Segurança: sessão profissional não deve ser forjável no localStorage', {auth:false,forged:true}, async f => {

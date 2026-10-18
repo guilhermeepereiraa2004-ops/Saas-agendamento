@@ -1,5 +1,6 @@
 /// <reference types="node" />
 import { verifyStaff, serverConfig } from './_lib/auth.js';
+import { tenantAppPath } from '../src/lib/pwa.js';
 
 type PushEventName =
   | 'client_joined'
@@ -207,7 +208,7 @@ export default {
       // APP_ORIGIN was historically configured without the protocol in this project.
       // OneSignal rejects web_url unless it starts with http:// or https://.
       const appOrigin = normalizeOrigin(process.env.APP_ORIGIN) || new URL(request.url).origin;
-      const destinationUrl = `${appOrigin}/${tenant.slug}`;
+      const destinationUrl = `${appOrigin}${tenantAppPath(tenant.slug, 'externalId' in eventMessage.target ? 'professional' : 'customer')}`;
       const targetIdentity = 'subscriptionId' in eventMessage.target
         ? eventMessage.target.subscriptionId
         : eventMessage.target.externalId;

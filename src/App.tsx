@@ -9,6 +9,7 @@ import { OneSignalInitializer } from './components/OneSignalInitializer';
 import LandingPage, { BrandMark } from './LandingPage';
 import { getStaffAccess } from './lib/access';
 import { mapTenant } from './lib/tenantData';
+import { tenantRoute } from './lib/pwa';
 
 function App() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
@@ -22,8 +23,8 @@ function App() {
 
   useEffect(() => {
     const fetchTenants = async () => {
-      const slug = currentPath.slice(1);
-      if (!slug || slug === 'admin') { setIsLoading(false); return; }
+      const slug = tenantRoute(currentPath)?.slug;
+      if (!slug) { setIsLoading(false); return; }
       const { data, error } = await supabase.rpc('get_public_tenant', { p_slug: slug });
 
       if (error) {
@@ -120,7 +121,8 @@ function App() {
       return <SuperAdmin />;
     }
 
-    const pathSlug = currentPath.replace('/', '');
+    const route = tenantRoute(currentPath);
+    const pathSlug = route?.slug || currentPath.slice(1);
     
     if (pathSlug) {
       const activeTenant = tenants.find(t => t.slug === pathSlug);
@@ -144,7 +146,7 @@ function App() {
             </div>
           );
         }
-        return <TenantApp tenant={activeTenant} />;
+        return <TenantApp tenant={activeTenant} audience={route?.audience} />;
       } else {
         return (
           <div className="home-container" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: '#09090b', color: '#fff' }}>

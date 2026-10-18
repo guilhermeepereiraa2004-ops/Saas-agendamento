@@ -1,0 +1,23 @@
+.install-app-card{display:flex;align-items:center;gap:14px;padding:18px 20px;margin:18px 0;border:1px solid #dce4db;border-radius:18px;background:#fffefa;color:#20392e;font-family:Poppins,sans-serif}
+.install-app-card>img{flex-shrink:0;border-radius:13px}
+.install-app-copy{flex:1;min-width:0}
+.install-app-copy strong{font-size:.9rem;font-weight:650}
+.install-app-copy p{margin:3px 0 0;font-size:.78rem;line-height:1.6;color:#59675e;overflow-wrap:anywhere}
+.install-app-card>button,.install-app-card>a,.install-app-primary,.install-app-done{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:11px 17px;border:0;border-radius:12px;background:#173f32;color:#fff;font:600 .78rem Poppins,sans-serif;text-decoration:none;cursor:pointer;text-align:center}
+.install-app-card>button:disabled,.install-app-primary:disabled{opacity:.65;cursor:wait}
+.install-app-dialog{position:fixed;inset:0;margin:auto;box-sizing:border-box;width:min(440px,calc(100% - 32px));max-height:calc(100dvh - 40px);padding:28px;border:1px solid #dce4db;border-radius:24px;background:#fffefa;color:#20392e;box-shadow:0 24px 100px #102c3340;font-family:Poppins,sans-serif;overflow-y:auto;overscroll-behavior:contain}
+.install-app-dialog::backdrop{background:#112a27a6;backdrop-filter:blur(4px)}
+.install-app-dialog>img{display:block;margin-bottom:15px;border-radius:16px}
+.install-app-close{position:absolute;right:12px;top:12px;min-width:44px;min-height:44px;border:0;border-radius:50%;background:#eef2eb;color:#20392e;font-size:26px;cursor:pointer}
+.install-app-eyebrow{display:block;color:#55704a;font-size:.7rem;font-weight:650;text-transform:uppercase;letter-spacing:.08em}
+.install-app-dialog h2{margin:7px 0 10px;font-size:1.35rem;line-height:1.35;overflow-wrap:anywhere}
+.install-app-dialog p,.install-app-dialog li{font-size:.83rem;line-height:1.75;color:#59675e}
+.install-app-dialog ol{margin:20px 0;padding-left:23px}
+.install-app-dialog li{padding-left:5px;margin-bottom:12px}
+.install-app-dialog li strong{color:#20392e}
+.install-app-dialog .install-app-notice{padding:13px;border:1px solid #dce4db;border-radius:12px;background:#f0f5eb;color:#29442f;font-size:.8rem;line-height:1.7}
+.install-app-dialog .install-app-footnote{margin-top:18px;font-size:.72rem}
+.install-app-primary,.install-app-done{width:100%;margin-top:6px}
+.install-app-done{background:#edf1e8;color:#20392e}
+.install-app-card :focus-visible{outline:3px solid #387549;outline-offset:3px}
+@media(max-width:600px){.install-app-card{display:grid;grid-template-columns:40px minmax(0,1fr);gap:10px 12px;padding:16px}.install-app-card>img{width:40px;height:40px}.install-app-card>button,.install-app-card>a{grid-column:1/-1;width:100%}.install-app-dialog{padding:24px 20px}}

@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "test:theme": "node scripts/test-tenant-theme.mjs",
     "test:database": "node scripts/test-database.mjs",
+    "test:pwa": "node scripts/test-pwa-manifest.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

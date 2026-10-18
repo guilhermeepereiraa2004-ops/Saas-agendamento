@@ -16,6 +16,8 @@ import { canManageTenant } from './lib/access';
 import { customerTokens } from './lib/customerTokens';
 import { mapTenant, TENANT_FIELDS } from './lib/tenantData';
 import { validWorkingHours, formatCalendarDate } from './lib/validation';
+import { InstallAppCard } from './components/InstallAppCard';
+import { tenantAppPath, type AppAudience } from './lib/pwa';
 
 type AdminTab = 'atendimento' | 'agenda' | 'financial' | 'tasks' | 'store' | 'services' | 'scheduling' | 'settings';
 type WorkingHours = NonNullable<Tenant['workingHours']>;
@@ -141,12 +143,19 @@ function AdminNavIcon({ tab }: { tab: AdminTab }) {
   return <svg {...common}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1h.1a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>;
 }
 
-export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant }) {
+export default function TenantApp({ tenant: initialTenant, audience }: { tenant: Tenant; audience?: AppAudience }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [tenant, setTenant] = useState<Tenant>(initialTenant);
   const { showToast } = useToasts();
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const prevQueueRef = useRef<QueueItem[]>([]);
+
+  useEffect(() => {
+    if (!audience) return;
+    const name = `${initialTenant.name}${audience === 'professional' ? ' · Profissional' : ' · Sua Vez'}`;
+    document.title = name;
+    document.querySelector('meta[name="apple-mobile-web-app-title"]')?.setAttribute('content', `${initialTenant.name}${audience === 'professional' ? ' Pro' : ''}`);
+  }, [audience, initialTenant.name]);
 
   // INITIAL LOAD + REALTIME
   const mapQueueItem = useCallback((q: QueueRow): QueueItem => {
@@ -342,7 +351,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const completionInFlight = useRef(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
-  const [showLogin, setShowLogin] = useState(false);
+  const [showLogin, setShowLogin] = useState(audience === 'professional');
   const [showPassword, setShowPassword] = useState(false);
   const loginDialogRef = useRef<HTMLDivElement>(null);
   const customerFormRef = useRef<HTMLElement>(null);
@@ -402,6 +411,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     });
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        if (showLogin && audience === 'professional') return;
         if (showJoinConfirmation) { setShowJoinConfirmation(false); return; }
         setShowMobileJoinModal(false);
         setShowLogin(false);
@@ -422,7 +432,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       window.removeEventListener('keydown', closeOnEscape);
       previousFocus?.focus();
     };
-  }, [showMobileJoinModal, showLogin, showJoinConfirmation]);
+  }, [showMobileJoinModal, showLogin, showJoinConfirmation, audience]);
 
   useEffect(() => {
     if (!isAdminAddModalOpen && !showServiceModal && !showAdminDeleteModal) return;
@@ -519,12 +529,27 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
   // Only a server-validated Auth session plus tenant membership unlocks the panel.
   useEffect(() => {
+    // A customer app stays on the customer experience even when this browser
+    // also has a staff session. Privileged access still requires membership.
+    if (audience === 'customer') return;
     let live = true;
-    const refresh = async () => { const allowed = await canManageTenant(tenant.id); if (live) setIsAuthenticated(allowed); };
+    const refresh = async () => {
+      const allowed = await canManageTenant(tenant.id);
+      if (!live) return;
+      // Existing shared links keep working and reach a page whose manifest
+      // matches the experience before the person chooses to install.
+      if (!audience) {
+        window.location.replace(tenantAppPath(tenant.slug, allowed ? 'professional' : 'customer') + window.location.search + window.location.hash);
+        return;
+      }
+      setIsAuthenticated(allowed);
+      if (allowed) setShowLogin(false);
+      else if (audience === 'professional') setShowLogin(true);
+    };
     void refresh();
     const { data: { subscription } } = supabase.auth.onAuthStateChange(() => { setTimeout(() => { if (live) void refresh(); }, 0); });
     return () => { live = false; subscription.unsubscribe(); };
-  }, [tenant.id]);
+  }, [tenant.id, tenant.slug, audience]);
 
   const fetchTasks = useCallback(async () => {
     const { data } = await supabase
@@ -1276,12 +1301,15 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
     const { error } = await supabase.auth.signOut({ scope: 'local' });
     if (error) { showToast('Não foi possível encerrar sua sessão. Tente novamente.', 'error'); return; }
     setIsAuthenticated(false);
+    if (audience === 'professional') setShowLogin(true);
     void logoutOneSignal();
   };
 
   const toggleRole = () => {
     if (isAuthenticated) {
       handleLogout();
+    } else if (audience === 'customer') {
+      window.location.assign(tenantAppPath(tenant.slug, 'professional'));
     } else {
       setShowLogin(true);
     }
@@ -1529,7 +1557,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       {showLogin && (
         <div className="login-page-overlay tenant-login fade-in" style={customerThemeStyle} role="dialog" aria-modal="true" aria-labelledby="professional-login-title" ref={loginDialogRef}>
           <div className="login-page-container">
-            <button type="button" className="login-back-button" onClick={() => { setShowLogin(false); setShowPassword(false); }}>
+            <button type="button" className="login-back-button" onClick={() => { if (audience === 'professional') window.location.assign(tenantAppPath(tenant.slug, 'customer')); else setShowLogin(false); setShowPassword(false); }}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
               Voltar para o site
             </button>
@@ -1878,6 +1906,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
 
             <div className="admin-content-scroll">
               <NotificationPermissionCard status={notificationStatus} busy={notifsEnabling} audience="professional" onAccept={() => void enableNotifications()} />
+              <InstallAppCard tenant={tenant} audience="professional" />
 
               {activeTab === 'financial' ? (
                 <div className="admin-module fade-in"><FinancialView tenantId={tenant.id} /></div>
@@ -2761,7 +2790,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         </div>
       ) : (
         /* CLIENT VIEW */
-        <div className="app-container customer-app" style={customerThemeStyle} inert={showLogin}>
+        <div className="app-container customer-app" style={audience === 'professional' ? { ...customerThemeStyle, visibility: 'hidden' } : customerThemeStyle} inert={showLogin}>
           <header className="customer-topbar">
             <div className="customer-platform-brand">
               <BrandMark className="customer-platform-mark" />
@@ -2848,6 +2877,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
             </div>
           </section>
 
+          {audience !== 'professional' && <InstallAppCard tenant={tenant} audience="customer" />}
           {myItemsInQueue.length > 0 && <NotificationPermissionCard status={notificationStatus} busy={notifsEnabling} audience="customer" onAccept={() => void enableNotifications()} />}
           {/* Client Content */}
           <div className="status-summary-container customer-status-grid fade-in">

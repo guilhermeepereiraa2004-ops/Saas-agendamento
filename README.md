@@ -94,6 +94,16 @@ Se a permissão estiver bloqueada, o painel mostra como liberá-la nas configura
 
 No celular, o painel profissional oferece atalhos fixos para Hoje, Agenda ou Serviços, Financeiro e Mais. O master oferece Clientes, Financeiro e Ajustes. Os menus adicionais permitem fechar com Escape, mantêm o foco no menu aberto e restauram o foco ao fechar. Os dois painéis usam Poppins e mantêm áreas de toque com pelo menos 44 pixels nas ações principais.
 
+## Aplicativos do cliente e profissional
+
+Cada estabelecimento oferece dois PWAs: `/<slug>/cliente/` para fila e agendamentos e `/<slug>/profissional/` para login e painel. O link antigo `/<slug>` continua funcionando e encaminha à experiência apropriada após verificar a sessão; a entrada explícita do cliente sempre mantém a visão pública, mesmo com uma sessão de equipe no navegador.
+
+O botão **Instalar app** aparece na página do cliente; **Instalar app profissional** aparece no painel. No Chrome/Android, usa `beforeinstallprompt` quando disponível e sempre exige clique e confirmação da pessoa. Sem esse evento, mostra as instruções do navegador. No iOS/iPadOS, orienta a instalação manual no Safari (Compartilhar → Adicionar à Tela de Início → Adicionar). Nenhuma permissão de notificações é solicitada pela instalação. Em modo standalone, o convite fica oculto. A aceitação do pedido não é apresentada como conclusão da instalação no Android.
+
+`/api/pwa-manifest` gera apenas metadados públicos, usando a chave pública e a RPC `get_public_tenant`. O `id` combina o UUID do estabelecimento e o público do app; o `start_url` e o `scope` apontam à entrada correspondente. Os dois apps usam a logo Sua Vez e nomes que identificam o estabelecimento. Notificações abrem a rota correspondente ao destinatário. A instalação não concede acesso profissional: a sessão e o vínculo com o estabelecimento continuam sendo verificados no servidor.
+
+O PWA geral anterior tem identidade `/`, preservada explicitamente no manifesto estático. Ele não é convertido automaticamente em um dos novos apps. Para usar uma instalação específica, instale pelo botão da página correspondente. Testes: `npm run test:pwa` para o endpoint e a auditoria `scratch/admin-audit/run.mjs` para os fluxos simulados de Android, iOS, autenticação e responsividade. A conclusão da instalação e as notificações no aparelho exigem teste em dispositivo real.
+
 ## Ícones do site e PWA
 
 Favicon, ícones de instalação e Apple Touch Icon usam o mesmo símbolo do componente `BrandMark`, com as cores de `src/brand.css`. Os PNGs têm dimensões reais de 192 e 512 pixels, o ícone Apple tem 180 pixels e o ICO inclui 16, 32 e 48 pixels. As versões maskable têm fundo opaco e mantêm o símbolo na área segura para recortes do sistema.
