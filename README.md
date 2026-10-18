@@ -93,3 +93,9 @@ O pedido de notificações parte do botão **Aceitar notificações**. Entrar no
 Se a permissão estiver bloqueada, o painel mostra como liberá-la nas configurações do site. Navegadores sem suporte recebem uma orientação específica. A identificação do profissional e a sincronização da inscrição continuam no servidor, usando a sessão autenticada. Consulte a [referência oficial do OneSignal Web SDK](https://documentation.onesignal.com/docs/en/web-sdk-reference).
 
 No celular, o painel profissional oferece atalhos fixos para Hoje, Agenda ou Serviços, Financeiro e Mais. O master oferece Clientes, Financeiro e Ajustes. Os menus adicionais permitem fechar com Escape, mantêm o foco no menu aberto e restauram o foco ao fechar. Os dois painéis usam Poppins e mantêm áreas de toque com pelo menos 44 pixels nas ações principais.
+
+## Ícones do site e PWA
+
+Favicon, ícones de instalação e Apple Touch Icon usam o mesmo símbolo do componente `BrandMark`, com as cores de `src/brand.css`. Os PNGs têm dimensões reais de 192 e 512 pixels, o ícone Apple tem 180 pixels e o ICO inclui 16, 32 e 48 pixels. As versões maskable têm fundo opaco e mantêm o símbolo na área segura para recortes do sistema.
+
+Para regenerar os arquivos, execute `node scripts/generate-app-icons.mjs` com Playwright e Chrome disponíveis. Assim como na auditoria de interface, `AUDIT_PLAYWRIGHT` aceita um caminho alternativo para o pacote. Os arquivos são distribuídos em `public/icons/`; ao trocar a identidade visual, atualize também a versão dos caminhos no HTML e no manifest para renovar o cache. Um ícone antigo salvo pelo sistema pode exigir remover o atalho/app instalado e adicioná-lo novamente.
