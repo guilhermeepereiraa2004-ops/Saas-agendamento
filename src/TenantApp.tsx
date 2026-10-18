@@ -1167,7 +1167,6 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
   const handleStartService = async (id: string) => {
     if (!isAuthenticated || activeQueueActionId) return;
     
-    // Find client to get push_id
     const client = queue.find(q => q.id === id);
     
     if (!client) return;
@@ -1185,7 +1184,6 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
         return;
       }
       showToast(`Atendimento de ${client.name} iniciado.`, 'success');
-      void sendPushNotification('service_started', tenant.id, client.id);
     } finally {
       setActiveQueueActionId(null);
     }

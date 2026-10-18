@@ -8,7 +8,6 @@ export type PushEventName =
   | 'client_joined'
   | 'client_called'
   | 'client_on_way'
-  | 'service_started'
   | 'appointment_approved'
   | 'appointment_rejected';
 

@@ -42,7 +42,7 @@ await test('Push API: registro não encontrado', async () => { lookupRows = fals
 await test('Push API: evento incompatível com estado não envia', async () => { item.status = 'waiting'; assert.equal((await handler.fetch(request())).status, 202); assert.equal(sent.length, 0); });
 await test('Push API: sem assinatura não envia para cliente', async () => { item.push_id = null; assert.equal((await handler.fetch(request())).status, 202); assert.equal(sent.length, 0); });
 for (const [event, status, appointment, target] of [
-  ['client_called', 'ready', null, 'client'], ['service_started', 'serving', null, 'client'], ['appointment_approved', 'waiting', now(), 'client'], ['appointment_rejected', 'cancelled', now(), 'client'], ['client_joined', 'waiting', null, 'admin'], ['client_on_way', 'ready', null, 'admin'],
+  ['client_called', 'ready', null, 'client'], ['appointment_approved', 'waiting', now(), 'client'], ['appointment_rejected', 'cancelled', now(), 'client'], ['client_joined', 'waiting', null, 'admin'], ['client_on_way', 'ready', null, 'admin'],
 ]) await test(`Push API: ${event} usa destinatário e conteúdo esperados`, async () => {
   Object.assign(item, { status, appointment_time: appointment, is_on_way: event === 'client_on_way' });
   const response = await handler.fetch(request({ event, tenantId, queueItemId,customerToken:'a'.repeat(64) }));
@@ -53,6 +53,11 @@ for (const [event, status, appointment, target] of [
   assert.equal(sent[0].web_url,destination);assert.equal(sent[0].web_buttons[0].url,destination);assert.ok(sent[0].idempotency_key);
 });
 await test('Push API: chave de idempotência estável para mesma ação', async () => { await handler.fetch(request()); await handler.fetch(request()); assert.equal(sent[0].idempotency_key, sent[1].idempotency_key); });
+for(const event of ['service_started','service_completed'])await test(`Push API: ${event} não envia aviso mesmo em versões antigas do app`, async()=>{
+  item.status=event==='service_started'?'serving':'completed';
+  assert.equal((await handler.fetch(request({event,tenantId,queueItemId}))).status,400);
+  assert.equal(sent.length,0);
+});
 await test('Push API: falha do provedor retorna 502', async () => { providerStatus = 400; providerBody = { errors: ['mock error'] }; assert.equal((await handler.fetch(request())).status, 502); });
 await test('Push API: nenhum dispositivo elegível retorna sem envio', async () => { providerBody = {}; const response = await handler.fetch(request()); assert.equal(response.status, 202); assert.equal((await response.json()).sent, false); });
 await test('Push API: limite de 24 requisições por minuto', async () => { for (let n = 0; n < 24; n++) await handler.fetch(request({}, { ip: 'rate-test' })); assert.equal((await handler.fetch(request({}, { ip: 'rate-test' }))).status, 429); });

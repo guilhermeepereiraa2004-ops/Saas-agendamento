@@ -384,6 +384,7 @@ try {
     await wait(() => f.db.queue_items.length === 0);
     assert.equal(f.db.financial_records.length, 1); assert.equal(f.db.financial_records[0].price, 35);
     assert.ok(f.requests.some(r => r.table === 'push' && r.body.event === 'client_called'));
+    assert.deepEqual(f.requests.filter(r=>r.table==='push').map(r=>r.body.event),['client_called'],'Iniciar e concluir não devem enviar avisos ao cliente');
   });
   await test('Fila: remover exige confirmação e não registra receita', { tables: { queue_items: [row('remove')] } }, async f => {
     await f.page.getByRole('button', { name: 'Remover Cliente remove do atendimento' }).click();

@@ -6,7 +6,6 @@ type PushEventName =
   | 'client_joined'
   | 'client_called'
   | 'client_on_way'
-  | 'service_started'
   | 'appointment_approved'
   | 'appointment_rejected';
 
@@ -37,7 +36,6 @@ const allowedEvents = new Set<PushEventName>([
   'client_joined',
   'client_called',
   'client_on_way',
-  'service_started',
   'appointment_approved',
   'appointment_rejected',
 ]);
@@ -139,9 +137,6 @@ function buildMessage(event: PushEventName, item: QueueRecord, tenant: TenantRec
   if (!clientTarget) return null;
   if (event === 'client_called' && item.status === 'ready') {
     return { title: 'Sua vez está chegando', message: `Olá, ${item.name}. Aproxime-se: seu atendimento começa em instantes.`, target: clientTarget, actionLabel: 'Acompanhar' };
-  }
-  if (event === 'service_started' && item.status === 'serving') {
-    return { title: 'Atendimento iniciado', message: `Olá, ${item.name}. Seu atendimento de ${item.service_name} começou.`, target: clientTarget, actionLabel: 'Ver atendimento' };
   }
   if (event === 'appointment_approved' && item.status === 'waiting' && item.appointment_time) {
     return { title: 'Agendamento confirmado', message: `Olá, ${item.name}. Seu horário para ${item.service_name} foi confirmado.`, target: clientTarget, actionLabel: 'Ver agendamento' };
