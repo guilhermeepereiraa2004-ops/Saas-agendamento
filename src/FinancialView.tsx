@@ -7,6 +7,11 @@ interface FinancialRecord {
   id: string;
   price: number;
   completed_at: string;
+  customer_name: string | null;
+  service_name: string | null;
+  appointment_time: string | null;
+  started_at: string | null;
+  duration: number | null;
 }
 
 interface FinancialExpense {
@@ -37,6 +42,18 @@ function parseCurrencyInput(value: string) {
   return Number.isFinite(amount) && amount > 0 ? amount : null;
 }
 
+// The Data API caps each response; keep the history and its totals complete.
+async function fetchAllPages<T>(fetchPage: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>) {
+  const rows: T[] = [];
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const result = await fetchPage(from, from + pageSize - 1);
+    if (result.error) return { data: null, error: result.error };
+    rows.push(...(result.data || []));
+    if (!result.data || result.data.length < pageSize) return { data: rows, error: null };
+  }
+}
+
 export default function FinancialView({ tenantId }: Props) {
   const { showToast } = useToasts();
   const [records, setRecords] = useState<FinancialRecord[]>([]);
@@ -47,33 +64,55 @@ export default function FinancialView({ tenantId }: Props) {
   const expenseInFlight = useRef(false);
   const expenseRequest = useRef<{ key: string; signature: string } | null>(null);
   const [savingExpense, setSavingExpense] = useState(false);
+  const [detailMonth, setDetailMonth] = useState<string | null>(null);
+  const [detailSearch, setDetailSearch] = useState('');
+  const detailDialog = useRef<HTMLDialogElement>(null);
   const [selectedMonth, setSelectedMonth] = useState<string>(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   });
 
   useEffect(() => {
+    const dialog = detailDialog.current;
+    if (detailMonth && dialog && !dialog.open) dialog.showModal();
+    if (!detailMonth && dialog?.open) dialog.close();
+    if (!detailMonth) return;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = overflow; };
+  }, [detailMonth]);
+
+  const openDetails = (month: string) => {
+    setDetailSearch('');
+    setDetailMonth(month);
+  };
+
+  useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
       
       const [recordsRes, expensesRes] = await Promise.all([
-        supabase
+        fetchAllPages<FinancialRecord>((from, to) => supabase
           .from('financial_records')
-          .select('id, price, completed_at')
+          .select('id, price, completed_at, customer_name, service_name, appointment_time, started_at, duration')
           .eq('tenant_id', tenantId)
-          .order('completed_at', { ascending: false }),
-        supabase
+          .order('completed_at', { ascending: false })
+          .order('id', { ascending: false })
+          .range(from, to)),
+        fetchAllPages<FinancialExpense>((from, to) => supabase
           .from('tenant_expenses')
           .select('id, description, amount, created_at')
           .eq('tenant_id', tenantId)
           .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .range(from, to))
       ]);
 
       if (recordsRes.data) setRecords(recordsRes.data);
       if (expensesRes.data) setExpenses(expensesRes.data.map(e => ({
         id: e.id,
         description: e.description,
-        amount: parseFloat(e.amount),
+        amount: Number(e.amount),
         created_at: e.created_at
       })));
 
@@ -114,11 +153,13 @@ export default function FinancialView({ tenantId }: Props) {
     expenseRequest.current = null;
     setSelectedMonth(localMonthKey(new Date()));
 
-    const { data, error: refreshError } = await supabase
+    const { data, error: refreshError } = await fetchAllPages<FinancialExpense>((from, to) => supabase
       .from('tenant_expenses')
       .select('id, description, amount, created_at')
       .eq('tenant_id', tenantId)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(from, to));
     if (refreshError) {
       showToast('Saída salva, mas a lista não pôde ser atualizada.', 'warning');
       return;
@@ -126,7 +167,7 @@ export default function FinancialView({ tenantId }: Props) {
     if (data) setExpenses(data.map(e => ({
       id: e.id,
       description: e.description,
-      amount: parseFloat(e.amount),
+      amount: Number(e.amount),
       created_at: e.created_at
     })));
     showToast('Saída registrada no mês atual.', 'success');
@@ -195,6 +236,13 @@ export default function FinancialView({ tenantId }: Props) {
   const formatCurrency = (val: number) =>
     val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
+  const detailRecords = records.filter(record => localMonthKey(record.completed_at) === detailMonth);
+  const normalizeSearch = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
+  const query = normalizeSearch(detailSearch.trim());
+  const filteredDetails = detailRecords.filter(record => normalizeSearch(`${record.customer_name || ''} ${record.service_name || ''}`).includes(query));
+  const detailTotal = detailRecords.reduce((sum, record) => sum + Number(record.price), 0);
+  const formatDateTime = (value: string) => new Date(value).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+
   if (loading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem', color: '#64748b' }}>
@@ -213,6 +261,7 @@ export default function FinancialView({ tenantId }: Props) {
           <h2 className="admin-module-title">Resumo financeiro</h2>
           <p className="admin-module-copy">Acompanhe entradas, saídas e saldo líquido sem perder o contexto.</p>
         </div>
+        <div className="financial-period-actions">
         <label className="financial-month-filter">
           <span>Mês de referência</span>
           <select 
@@ -245,6 +294,8 @@ export default function FinancialView({ tenantId }: Props) {
             })()}
           </select>
         </label>
+        <button type="button" className="financial-details-button" onClick={() => openDetails(selectedMonth)}>Ver detalhado</button>
+        </div>
       </div>
 
       {/* Stats Summary */}
@@ -318,6 +369,7 @@ export default function FinancialView({ tenantId }: Props) {
                   <div className="financial-month-description">
                     <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{formatMonth(key)}</div>
                     <div style={{ fontSize: '0.8rem', color: '#64748b' }}>{data.count} {data.count === 1 ? 'atendimento' : 'atendimentos'}</div>
+                    <button type="button" className="financial-details-button" aria-label={`Ver detalhado de ${formatMonth(key)}`} onClick={() => openDetails(key)}>Ver detalhado <span aria-hidden="true">→</span></button>
                   </div>
                   <div className="financial-month-amounts">
                     <strong className="financial-month-net" data-positive={data.revenue >= data.expenses}>{formatCurrency(data.revenue - data.expenses)}</strong>
@@ -386,6 +438,47 @@ export default function FinancialView({ tenantId }: Props) {
           </div>
         </div>
       </div>
+      <dialog ref={detailDialog} className="financial-detail-dialog" aria-labelledby="financial-detail-title" onClose={() => setDetailMonth(null)}>
+        <div className="financial-detail-heading">
+          <div>
+            <span className="admin-eyebrow">Atendimentos concluídos</span>
+            <h2 id="financial-detail-title">{detailMonth ? formatMonth(detailMonth) : 'Detalhamento'}</h2>
+          </div>
+          <button type="button" className="financial-detail-close" aria-label="Fechar detalhamento" onClick={() => setDetailMonth(null)}>✕</button>
+        </div>
+        <div className="financial-detail-body">
+          <div className="financial-detail-summary">
+            <div><span>Atendimentos</span><strong>{detailRecords.length}</strong></div>
+            <div><span>Total de entradas</span><strong>{formatCurrency(detailTotal)}</strong></div>
+          </div>
+          <p className="financial-detail-copy">Veja quem foi atendido, o serviço realizado e o valor registrado. Cancelamentos e agendamentos em aberto não entram neste total.</p>
+          <label className="financial-detail-search">
+            Buscar cliente ou serviço
+            <input type="search" placeholder="Nome do cliente ou serviço" value={detailSearch} onChange={event => setDetailSearch(event.target.value)} />
+          </label>
+          {detailRecords.some(record => !record.customer_name || !record.service_name) ? <p className="financial-detail-notice">Alguns registros antigos não guardavam o nome do cliente ou o serviço. Seus valores continuam no total.</p> : null}
+          <p className="financial-detail-results" role="status">{filteredDetails.length} {filteredDetails.length === 1 ? 'atendimento encontrado' : 'atendimentos encontrados'}{query ? ` · ${formatCurrency(filteredDetails.reduce((sum, record) => sum + Number(record.price), 0))}` : ''}</p>
+          {filteredDetails.length ? (
+            <ul className="financial-detail-list">
+              {filteredDetails.map(record => (
+                <li key={record.id} className="financial-detail-item">
+                  <div className="financial-detail-customer">
+                    <h3>{record.customer_name || 'Cliente não registrado'}</h3>
+                    <p>{record.service_name || 'Serviço não registrado'}</p>
+                    {record.duration ? <small>Duração prevista: {record.duration} min</small> : null}
+                  </div>
+                  <strong className="financial-detail-price">{formatCurrency(Number(record.price))}</strong>
+                  <dl className="financial-detail-dates">
+                    {record.appointment_time ? <div><dt>Agendado para</dt><dd>{formatDateTime(record.appointment_time)}</dd></div> : null}
+                    {record.started_at ? <div><dt>Iniciado em</dt><dd>{formatDateTime(record.started_at)}</dd></div> : null}
+                    <div><dt>Concluído em</dt><dd>{formatDateTime(record.completed_at)}</dd></div>
+                  </dl>
+                </li>
+              ))}
+            </ul>
+          ) : <div className="financial-detail-empty">{query ? 'Nenhum atendimento corresponde à busca.' : 'Nenhum atendimento concluído neste mês.'}</div>}
+        </div>
+      </dialog>
     </div>
   );
 }

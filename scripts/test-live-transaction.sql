@@ -36,6 +36,7 @@ do $$ declare first_result jsonb; second_result jsonb; expense_a uuid; expense_b
   second_result=public.complete_service(current_setting('qa.tenant_id')::uuid,current_setting('qa.queue_id')::uuid);
   if first_result->>'record_id' is distinct from second_result->>'record_id' or not (second_result->>'already_completed')::boolean then raise exception 'Conclusão repetida incorreta'; end if;
   if (select count(*) from public.financial_records where tenant_id=current_setting('qa.tenant_id')::uuid)<>1 then raise exception 'Receita duplicada'; end if;
+  if not exists(select 1 from public.financial_records where tenant_id=current_setting('qa.tenant_id')::uuid and customer_name='Cliente QA' and service_name='Serviço QA' and service_id='qa-cut' and duration=30 and price=35) then raise exception 'Detalhes financeiros não preservados'; end if;
   if exists(select 1 from public.queue_items where id=current_setting('qa.queue_id')::uuid) then raise exception 'Atendimento não removido'; end if;
   expense_a=public.record_expense(current_setting('qa.tenant_id')::uuid,'Material QA',50,current_setting('qa.expense_request')::uuid);
   expense_b=public.record_expense(current_setting('qa.tenant_id')::uuid,'Material QA',50,current_setting('qa.expense_request')::uuid);
@@ -45,6 +46,7 @@ end $$;
 select set_config('request.jwt.claim.sub',gen_random_uuid()::text,true);
 do $$ begin
   if exists(select 1 from public.tenants where id=current_setting('qa.tenant_id')::uuid) then raise exception 'Outro usuário lê estabelecimento alheio'; end if;
+  if exists(select 1 from public.financial_records where tenant_id=current_setting('qa.tenant_id')::uuid) then raise exception 'Outro usuário lê detalhes financeiros alheios'; end if;
   begin perform public.record_expense(current_setting('qa.tenant_id')::uuid,'Acesso negado QA',50,gen_random_uuid()); raise exception 'Outro usuário lança despesa'; exception when insufficient_privilege then null; end;
 end $$;
 reset role;

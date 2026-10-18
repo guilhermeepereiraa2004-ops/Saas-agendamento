@@ -31,8 +31,8 @@ alter table tenants enable row level security; create policy legacy_open on tena
 insert into auth.users values('${admin}','master@example.invalid'),('${owner}','owner@example.invalid'),('${other}','other@example.invalid');
 insert into tenants(id,name,slug,login_password,login_email,services) values('${tenant}','QA','qa','exposed-old-password','owner@example.invalid','[{"id":"cut","name":"Corte","price":35,"duration":30}]'),('${second}','Other','other',null,'other@example.invalid','[]');
 `);
-const migration = (await readdir(new URL('../supabase/migrations/', import.meta.url))).find(name => name.endsWith('_secure_access_and_financial_integrity.sql'));
-await db.exec(await readFile(new URL(`../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
+const migrations = (await readdir(new URL('../supabase/migrations/', import.meta.url))).filter(name => name.endsWith('.sql')).sort();
+for (const migration of migrations) await db.exec(await readFile(new URL(`../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
 await db.exec(`insert into app_private.platform_admins values('${admin}'); insert into app_private.tenant_memberships values('${tenant}','${owner}'),('${second}','${other}');`);
 let count = 0;
 async function as(role, userId, sql, params = []) {
@@ -109,12 +109,25 @@ try {
     await denied('authenticated',other,'select complete_service($1,$2)',[tenant,queueId]);
   });
   await test('Completion is idempotent and records exactly one receipt', async () => {
-    await as('authenticated',owner,"update queue_items set status='serving' where id=$1",[queueId]);
+    await as('authenticated',owner,"update queue_items set status='serving',started_at='2026-10-18T10:00:00-03:00' where id=$1",[queueId]);
     const first=(await as('authenticated',owner,'select complete_service($1,$2) result',[tenant,queueId])).rows[0].result;
     const again=(await as('authenticated',owner,'select complete_service($1,$2) result',[tenant,queueId])).rows[0].result;
     assert.equal(first.already_completed,false); assert.equal(again.already_completed,true); assert.equal(first.record_id,again.record_id);
     assert.equal((await db.query('select count(*)::int n from financial_records')).rows[0].n,1);
     assert.equal((await db.query('select count(*)::int n from queue_items')).rows[0].n,0);
+  });
+  await test('Receipt preserves customer, booked service and times after queue removal and catalog edits', async () => {
+    await as('authenticated',owner,`update tenants set services='[{"id":"cut","name":"Novo nome","price":99,"duration":45}]' where id=$1`,[tenant]);
+    const receipt=(await as('authenticated',owner,'select * from financial_records where source_queue_item_id=$1',[queueId])).rows[0];
+    assert.equal(receipt.customer_name,'Cliente Completo'); assert.equal(receipt.service_name,'Corte');
+    assert.equal(receipt.service_id,'cut'); assert.equal(Number(receipt.price),35); assert.equal(receipt.duration,30);
+    assert.equal(new Date(receipt.started_at).toISOString(),'2026-10-18T13:00:00.000Z');
+    assert.equal(receipt.appointment_time,null);
+    for(const key of ['whatsapp','push_id','customer_token_hash']) assert.equal(key in receipt,false);
+    assert.equal((await as('authenticated',other,'select customer_name,service_name from financial_records')).rows.length,0);
+    await denied('anon',null,'select customer_name,service_name from financial_records');
+    await denied('authenticated',owner,"update financial_records set customer_name='Forged' where id=$1",[receipt.id]);
+    await as('authenticated',owner,`update tenants set services='[{"id":"cut","name":"Corte","price":35,"duration":30}]' where id=$1`,[tenant]);
   });
   await test('Failure deleting queue rolls back revenue in the same transaction', async () => {
     const q=(await as('anon',null,'select * from join_queue($1,$2,$3,$4,$5)',[tenant,'cut','Rollback QA','71999999999','b'.repeat(64)])).rows[0].join_queue;
@@ -161,7 +174,13 @@ try {
     assert.equal(q.status,'pending');assert.equal(Number(q.price),35);
     await assert.rejects(()=>join('09:00'));
     await as('authenticated',owner,"update queue_items set status='cancelled' where id=$1",[q.id]);
-    assert.equal((await join('09:00')).rows.length,1);
+    const scheduled=(await join('09:00')).rows[0].join_queue;
+    await as('authenticated',owner,"update queue_items set status='serving',started_at=appointment_time where id=$1",[scheduled.id]);
+    await as('authenticated',owner,'select complete_service($1,$2)',[tenant,scheduled.id]);
+    const receipt=(await as('authenticated',owner,'select * from financial_records where source_queue_item_id=$1',[scheduled.id])).rows[0];
+    assert.equal(new Date(receipt.appointment_time).toISOString(),new Date(`${date}T09:00:00-03:00`).toISOString());
+    assert.equal(new Date(receipt.started_at).toISOString(),new Date(receipt.appointment_time).toISOString());
+    assert.equal(receipt.customer_name,'Reserva QA');
   });
   await test('Suspended tenant cannot receive bookings or access private data',async()=>{
     await as('authenticated',admin,'update tenants set is_active=false where id=$1',[tenant]);

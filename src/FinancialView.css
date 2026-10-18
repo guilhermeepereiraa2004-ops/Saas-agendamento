@@ -86,3 +86,85 @@
   .financial-expense-controls { flex-wrap: wrap; }
   .financial-expense-controls .btn-submit { width: 100% !important; min-height: 44px; }
 }
+
+.financial-period-actions { display: grid; gap: .6rem; min-width: 0; }
+.professional-admin .financial-details-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .75rem;
+  min-height: 44px;
+  padding: .65rem 1rem;
+  border: 1px solid #c8dcd0;
+  border-radius: 12px;
+  background: #eef6f0;
+  color: #174837;
+  font: inherit;
+  font-size: .8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.financial-month-description .financial-details-button { margin-top: .8rem; }
+.financial-details-button:hover { background: #e0eee4; }
+.financial-details-button:focus-visible, .financial-detail-dialog button:focus-visible { outline: 3px solid #56a880; outline-offset: 3px; }
+.professional-admin .financial-detail-dialog {
+  width: min(760px, calc(100% - 2rem));
+  max-width: none;
+  max-height: calc(100dvh - 2rem);
+  padding: 0;
+  margin: auto;
+  border: 1px solid #dce6df;
+  border-radius: 24px;
+  background: #fff;
+  color: #18382c;
+  box-shadow: 0 24px 80px #122d3533;
+  font-family: 'Poppins', sans-serif;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.financial-detail-dialog::backdrop { background: #10271fc2; }
+.financial-detail-heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid #e3ebe6;
+  background: #f6faf7;
+}
+.financial-detail-heading > div { min-width: 0; }
+.financial-detail-heading h2 { margin: .3rem 0 0; font-size: 1.35rem; line-height: 1.4; overflow-wrap: anywhere; }
+.financial-detail-close { display: grid; place-items: center; flex-shrink: 0; width: 44px; height: 44px; border: 1px solid #dce6df; border-radius: 12px; background: #fff; color: #18382c; cursor: pointer; }
+.financial-detail-body { padding: 1.5rem; }
+.financial-detail-summary { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: .75rem; }
+.financial-detail-summary > div { display: grid; align-content: start; gap: .4rem; padding: 1rem; border: 1px solid #dce6df; border-radius: 14px; min-width: 0; }
+.financial-detail-summary span { color: #526b5d; font-size: .75rem; }
+.financial-detail-summary strong { font-size: clamp(1rem, 4vw, 1.5rem); line-height: 1.4; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.financial-detail-copy, .financial-detail-notice { font-size: .78rem; line-height: 1.7; margin: 1rem 0; color: #526b5d; }
+.financial-detail-notice { padding: .8rem 1rem; background: #fff8e8; border: 1px solid #ecdfb9; border-radius: 12px; color: #785823; }
+.financial-detail-search { display: grid; gap: .5rem; color: #18382c; font-size: .8rem; font-weight: 600; }
+.professional-admin .financial-detail-search input { width: 100%; min-width: 0; box-sizing: border-box; font: inherit; }
+.financial-detail-results { color: #526b5d; font-size: .75rem; margin: 1rem 0 .75rem; }
+.financial-detail-list { display: grid; gap: .8rem; padding: 0; margin: 0; list-style: none; }
+.financial-detail-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .85rem; padding: 1rem; border: 1px solid #dce6df; border-radius: 16px; }
+.financial-detail-customer { min-width: 0; overflow-wrap: anywhere; }
+.financial-detail-customer h3 { margin: 0 0 .3rem; font-size: .95rem; line-height: 1.5; }
+.financial-detail-customer p { margin: 0; font-size: .85rem; color: #526b5d; }
+.financial-detail-customer small { display: block; margin-top: .35rem; font-size: .7rem; color: #526b5d; }
+.financial-detail-price { color: #17734e; font-size: 1rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.financial-detail-dates { display: grid; gap: .4rem; grid-column: 1 / -1; border-top: 1px solid #e3ebe6; padding-top: .75rem; margin: 0; font-size: .72rem; }
+.financial-detail-dates > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .2rem .75rem; }
+.financial-detail-dates dt { color: #526b5d; }
+.financial-detail-dates dd { margin: 0; font-weight: 500; }
+.financial-detail-empty { padding: 2rem 1rem; border: 1px dashed #dce6df; border-radius: 14px; text-align: center; color: #526b5d; font-size: .85rem; }
+@media (max-width: 600px) {
+  .professional-admin .financial-detail-dialog { width: calc(100% - 1rem); max-height: calc(100dvh - 1rem); border-radius: 20px; }
+  .financial-detail-heading, .financial-detail-body { padding: 1rem; }
+  .financial-detail-heading h2 { font-size: 1.15rem; }
+  .financial-detail-item { grid-template-columns: minmax(0, 1fr); }
+  .financial-detail-price { font-size: 1.1rem; }
+  .financial-detail-summary > div { padding: .75rem; }
+}

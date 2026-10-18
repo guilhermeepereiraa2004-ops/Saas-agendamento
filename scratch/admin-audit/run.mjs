@@ -131,7 +131,7 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
           if(old) return send({record_id:old.id,already_completed:true});
           const q=db.queue_items.find(q=>q.id===body.p_queue_id);
           if(!q) return send({message:'Missing queue item'},400);
-          const r={id:crypto.randomUUID(),tenant_id:q.tenant_id,price:q.price,completed_at:now,source_queue_item_id:q.id};
+          const r={id:crypto.randomUUID(),tenant_id:q.tenant_id,price:q.price,completed_at:now,source_queue_item_id:q.id,customer_name:q.name,service_name:q.service_name,appointment_time:q.appointment_time,started_at:q.started_at,duration:q.duration};
           db.financial_records.push(r); db.queue_items=db.queue_items.filter(x=>x!==q);
           return send({record_id:r.id,already_completed:false});
         }
@@ -163,7 +163,8 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
       if (method === 'DELETE') db[table] = rows.filter(item => !match(item));
       const count = affected.length;
       const limit = Number(url.searchParams.get('limit') || affected.length);
-      affected = affected.slice(0, limit);
+      const offset=Number(url.searchParams.get('offset')||0);
+      affected = affected.slice(offset, offset+limit);
       const single = request.headers().accept?.includes('vnd.pgrst.object');
       const select = url.searchParams.get('select');
       const project = item => select && select !== '*' ? Object.fromEntries(select.split(',').map(key => [key, item[key]])) : item;
@@ -386,6 +387,9 @@ try {
     assert.equal(f.db.financial_records.length, 1); assert.equal(f.db.financial_records[0].price, 35);
     assert.ok(f.requests.some(r => r.table === 'push' && r.body.event === 'client_called'));
     assert.deepEqual(f.requests.filter(r=>r.table==='push').map(r=>r.body.event),['client_called'],'Iniciar e concluir não devem enviar avisos ao cliente');
+    await f.nav('Financeiro'); await f.page.getByRole('button',{name:'Ver detalhado',exact:true}).click();
+    const details=f.page.getByRole('dialog');await visible(details.getByText('Cliente lifecycle',{exact:true}));
+    await visible(details.getByText('Corte QA',{exact:true}));assert.match(await details.locator('.financial-detail-price').innerText(),/35,00/);
   });
   await test('Fila: cancelar exige confirmação, mantém registro e envia aviso sem receita', { tables: { queue_items: [row('remove')] } }, async f => {
     await f.page.getByRole('button', { name: 'Cancelar atendimento de Cliente remove' }).click();
@@ -520,6 +524,53 @@ try {
     await new Promise(resolve => setTimeout(resolve, 300)); assert.equal(f.db.tenant_products.length, 0, 'Produto gravado com nome vazio após trim');
   });
   const financialTables = { financial_records: [{ id: 'f1', tenant_id: tenantId, price: '100.50', completed_at: now }, { id: 'f2', tenant_id: tenantId, price: '49.50', completed_at: now }, { id: 'f3', tenant_id: tenantId, price: '60', completed_at: '2026-09-30T12:00:00-03:00' }], tenant_expenses: [{ id: 'e1', tenant_id: tenantId, amount: '25', description: 'Material QA', created_at: now }] };
+  const detailTables={financial_records:[
+    {id:'ana',tenant_id:tenantId,price:'120.50',customer_name:'Ana Cláudia Pereira',service_name:'Corte e hidratação',duration:60,completed_at:now,appointment_time:'2026-10-17T08:00:00-03:00',started_at:'2026-10-17T08:05:00-03:00'},
+    {id:'joao',tenant_id:tenantId,price:'35',customer_name:'João da Silva',service_name:'Barba',completed_at:now},
+    {id:'legacy',tenant_id:tenantId,price:'50',customer_name:null,service_name:null,completed_at:now},
+    {id:'older',tenant_id:tenantId,price:'60',customer_name:'Cliente de Setembro',service_name:'Corte social',completed_at:'2026-09-30T12:00:00-03:00'},
+  ],tenant_expenses:[{id:'expense-only',tenant_id:tenantId,description:'Material',amount:10,created_at:'2026-08-12T12:00:00-03:00'}]};
+  await test('Financeiro detalhado: histórico acima de mil registros mantém clientes e totais completos',{tables:{
+    financial_records:Array.from({length:1005},(_,i)=>({id:`large-${i}`,tenant_id:tenantId,price:10,customer_name:`Cliente ${i}`,service_name:'Corte',completed_at:now})),
+    tenant_expenses:Array.from({length:1002},(_,i)=>({id:`expense-${i}`,tenant_id:tenantId,amount:1,description:`Material ${i}`,created_at:now})),
+  }},async f=>{
+    await f.nav('Financeiro');await visible(f.page.getByRole('heading',{name:'Resumo financeiro'}));
+    assert.match(await f.page.locator('.financial-kpis .admin-kpi-card').filter({hasText:'Saldo líquido no mês'}).innerText(),/9\.048,00/);
+    await f.page.getByRole('button',{name:'Ver detalhado',exact:true}).click();
+    const dialog=f.page.getByRole('dialog');assert.match(await dialog.locator('.financial-detail-summary').innerText(),/10\.050,00/);
+    assert.equal(await dialog.locator('.financial-detail-item').count(),1005);
+    await dialog.getByRole('searchbox').fill('Cliente 1004');await visible(dialog.getByText('Cliente 1004',{exact:true}));
+    assert.equal(await dialog.locator('.financial-detail-item').count(),1);
+  });
+  for(const width of [320,390,768,1440])await test(`Financeiro detalhado: clientes, serviços, busca, mês e acessibilidade em ${width}px`,{width,tables:detailTables},async f=>{
+    await f.nav('Financeiro');
+    const trigger=f.page.getByRole('button',{name:'Ver detalhado',exact:true});await trigger.click();
+    const dialog=f.page.getByRole('dialog',{name:'Outubro 2026'});await visible(dialog);
+    assert.match(await dialog.locator('.financial-detail-summary').innerText(),/205,50/);
+    assert.equal(await dialog.locator('.financial-detail-item').count(),3);
+    await visible(dialog.getByText('Ana Cláudia Pereira',{exact:true}));await visible(dialog.getByText('Corte e hidratação',{exact:true}));
+    await visible(dialog.getByText('Cliente não registrado',{exact:true}));await visible(dialog.getByText(/Alguns registros antigos/));
+    assert.match(await dialog.locator('.financial-detail-item').first().innerText(),/17\/10\/2026.*08:00/);
+    assert.equal(await dialog.getByText('Cliente de Setembro',{exact:true}).count(),0);
+    await dialog.getByRole('searchbox').fill('claudia');assert.equal(await dialog.locator('.financial-detail-item').count(),1);
+    assert.match(await dialog.getByRole('status').innerText(),/120,50/);
+    await dialog.getByRole('searchbox').fill('barba');await visible(dialog.getByText('João da Silva',{exact:true}));
+    await dialog.getByRole('searchbox').fill('inexistente');await visible(dialog.getByText('Nenhum atendimento corresponde à busca.'));
+    await dialog.getByRole('searchbox').fill('');await noOverflow(f);
+    assert.equal(await dialog.evaluate(el=>el.scrollWidth>el.clientWidth),false,'Diálogo possui rolagem horizontal');
+    if(width===390||width===1440)await f.page.screenshot({path:fileURLToPath(new URL(`financeiro-detalhado-${width}.png`,output)),animations:'disabled'});
+    await dialog.getByRole('button',{name:'Fechar detalhamento'}).focus();await f.page.keyboard.press('Shift+Tab');
+    assert.equal(await f.page.evaluate(()=>!!document.activeElement.closest('dialog')),true);
+    await f.page.keyboard.press('Escape');await wait(()=>dialog.isVisible().then(v=>!v));await trigger.focus();
+    await f.page.getByRole('button',{name:'Ver detalhado de Setembro 2026',exact:true}).click();
+    const september=f.page.getByRole('dialog',{name:'Setembro 2026'});await visible(september);
+    await visible(september.getByText('Cliente de Setembro',{exact:true}));assert.equal(await september.locator('.financial-detail-item').count(),1);
+    assert.match(await september.locator('.financial-detail-summary').innerText(),/60,00/);
+    await september.getByRole('button',{name:'Fechar detalhamento'}).click();
+    await f.page.getByRole('button',{name:'Ver detalhado de Agosto 2026',exact:true}).click();
+    await visible(f.page.getByRole('dialog').getByText('Nenhum atendimento concluído neste mês.'));
+    assert.equal(f.requests.some(r=>r.table==='financial_records'&&['POST','PATCH','DELETE'].includes(r.method)),false);
+  });
   for(const width of [320,390,768,1024,1440])await test(`Financeiro visual: valores completos e histórico sem sobreposição em ${width}px`, {width,standalone:true,push:'enabled',tables:{
     financial_records:[{id:'large',tenant_id:tenantId,price:'1234567.89',completed_at:now},{id:'older',tenant_id:tenantId,price:'100',completed_at:'2026-09-30T12:00:00-03:00'}],
     tenant_expenses:[{id:'long',tenant_id:tenantId,amount:'23456.78',description:'Reposição de materiais e manutenção do estabelecimento com descrição extensa',created_at:now}],
@@ -637,7 +688,7 @@ try {
   });
   await test('Adicional: conclusão simultânea em dois dispositivos não duplica receita', { delay: 350, tables: { queue_items: [row('concurrent', 'serving')] } }, async f => {
     const second = await f.context.newPage(); second.setDefaultTimeout(8000); await second.routeWebSocket('**/realtime/**', socket => socket.close()); await second.clock.install({ time: new Date(now) });
-    await second.goto('https://admin-audit.test/qa'); await visible(second.locator('.professional-admin'));
+    await second.goto('https://admin-audit.test/qa/profissional/'); await visible(second.locator('.professional-admin'));
     await Promise.all([f.page.getByRole('button', { name: 'Concluir', exact: true }).click(), second.getByRole('button', { name: 'Concluir', exact: true }).click()]);
     await wait(() => f.db.queue_items.length === 0); assert.equal(f.db.financial_records.length, 1, 'Dois dispositivos concluem o mesmo atendimento e registram duas receitas');
   });
