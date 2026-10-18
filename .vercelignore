@@ -16,8 +16,9 @@ scripts/*
 !scripts/test-abort-compat.mjs
 !scripts/reset-master-password.mjs
 !scripts/test-live-transaction.sql
-supabase/*
-!supabase/migrations/
+supabase/.temp/
+supabase/.branches/
+supabase/templates/
 node_modules/
 dist/
 *.log
