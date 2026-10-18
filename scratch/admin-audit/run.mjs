@@ -31,12 +31,13 @@ async function wait(check, message = 'State did not update', ms = 7500) {
 }
 async function visible(locator) { await locator.waitFor({ state: 'visible' }); }
 const field = (page, text) => page.locator('.form-group').filter({ has: page.locator('label').filter({ hasText: new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }) }).first().locator('input, select').first();
-async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, forged = false, master = false, delay = 0, push = 'unsupported', permissionChoice = 'granted', path, userAgent, standalone = false, origin = 'https://admin-audit.test', ownedItems = [] } = {}) {
+async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, forged = false, master = false, delay = 0, push = 'unsupported', permissionChoice = 'granted', pushFailures = 0, path, userAgent, standalone = false, origin = 'https://admin-audit.test', ownedItems = [] } = {}) {
   const db = {
     tenants: [structuredClone({ ...base, ...tenant })], queue_items: [], tenant_tasks: [], tenant_products: [], tenant_expenses: [], financial_records: [],
     platform_settings: [{ id: 'settings', pix_key: 'fixture-key', pix_name: 'QA beneficiary' }], ...structuredClone(tables),
   };
   const requests = []; const exceptions = []; const faults = [];
+  if(pushFailures) faults.push({table:'push-device',remaining:pushFailures,status:200,body:{registered:false,reason:'not-linked'}});
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'America/Bahia', serviceWorkers: 'block', ...(userAgent ? {userAgent} : {}) });
   if (standalone) await context.addInitScript(() => {
     const original = window.matchMedia.bind(window);
@@ -686,17 +687,74 @@ try {
     assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);await noOverflow(f);
     if(width===390)await f.page.screenshot({path:fileURLToPath(new URL('push-device-verified-mobile.png',output)),animations:'disabled'});
   });
+  await test('Avisos automáticos: PWA recupera vínculo atrasado ao abrir sem clique nem novo pedido', {push:'enabled',pushFailures:1,width:390,standalone:true}, async f=>{
+    await wait(()=>f.requests.some(r=>r.table==='push-device'));
+    assert.equal(await f.page.getByRole('button',{name:'Reconectar avisos'}).count(),0);
+    await f.page.clock.runFor(3000);
+    await f.nav('Perfil e aparência');await visible(f.page.getByRole('button',{name:'Enviar teste neste aparelho'}));
+    assert.equal(f.requests.filter(r=>r.table==='push-device').length,2);
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
+    assert.equal(f.requests.some(r=>r.table==='push-device'&&r.body.action==='test'),false);
+    await f.page.reload();await f.nav('Perfil e aparência');await visible(f.page.getByRole('button',{name:'Enviar teste neste aparelho'}));
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
+  });
+  await test('Avisos automáticos: volta da internet recupera falha persistente sem botão manual', {push:'enabled',pushFailures:3}, async f=>{
+    await wait(()=>f.requests.filter(r=>r.table==='push-device').length===1);
+    await f.page.clock.runFor(3000);await wait(()=>f.requests.filter(r=>r.table==='push-device').length===2);
+    await f.page.clock.runFor(7000);await visible(f.page.getByRole('button',{name:'Reconectar avisos'}));
+    await f.page.evaluate(()=>window.dispatchEvent(new Event('online')));
+    await f.page.getByRole('button',{name:'Reconectar avisos'}).waitFor({state:'detached'});
+    await f.nav('Perfil e aparência');await visible(f.page.getByRole('button',{name:'Enviar teste neste aparelho'}));
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
+  });
+  await test('Avisos automáticos: retorno do PWA agrupa eventos e revalida sem pedir permissão', {push:'enabled'}, async f=>{
+    await f.nav('Perfil e aparência');await visible(f.page.getByRole('button',{name:'Enviar teste neste aparelho'}));
+    const before=f.requests.filter(r=>r.table==='push-device').length;
+    await f.page.evaluate(()=>{window.dispatchEvent(new Event('pageshow'));window.dispatchEvent(new Event('focus'));document.dispatchEvent(new Event('visibilitychange'));});
+    await visible(f.page.getByRole('button',{name:'Enviar teste neste aparelho'}));
+    await wait(()=>f.requests.filter(r=>r.table==='push-device').length===before+1);
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
+  });
+  await test('Avisos automáticos: sair cancela tentativas e não reconecta profissional em segundo plano', {push:'enabled',pushFailures:3}, async f=>{
+    await wait(()=>f.requests.some(r=>r.table==='push-device'));
+    await f.page.getByRole('button',{name:'Sair do Painel'}).click();await visible(f.page.getByRole('button',{name:'Entrar no meu painel'}));
+    const before=f.requests.filter(r=>r.table==='push-device').length;
+    await f.page.clock.runFor(20000);await f.page.evaluate(()=>window.dispatchEvent(new Event('online')));
+    assert.equal(f.requests.filter(r=>r.table==='push-device').length,before);
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
+  });
+  await test('Avisos automáticos: conexão travada tem limite e mantém recuperação manual disponível', {push:'enabled'}, async f=>{
+    await f.nav('Perfil e aparência');await visible(f.page.getByRole('button',{name:'Enviar teste neste aparelho'}));
+    let release, arrived=false;const gate=new Promise(resolve=>{release=resolve;});
+    const handler=async route=>{arrived=true;await gate;await route.abort().catch(()=>{});};
+    await f.page.route('**/api/push-device',handler);
+    await f.page.evaluate(()=>window.dispatchEvent(new Event('online')));await wait(()=>arrived);
+    await f.page.clock.runFor(46000);await visible(f.page.getByRole('button',{name:'Reconectar avisos'}));
+    await visible(f.page.getByText(/Não foi possível recuperar automaticamente os avisos a tempo/));
+    release();await f.page.unroute('**/api/push-device',handler);
+    await f.page.getByRole('button',{name:'Reconectar avisos'}).click();await visible(f.page.getByRole('button',{name:'Enviar teste neste aparelho'}));
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
+  });
   await test('Avisos: permissão aceita com vínculo remoto ausente mostra correção e recupera sem novo prompt', {push:'enabled',width:390}, async f=>{
     await f.nav('Perfil e aparência');await visible(f.page.getByRole('button',{name:'Enviar teste neste aparelho'}));
     await f.nav('Fila de agora');
-    f.faults.push({table:'push-device',remaining:1,status:200,body:{registered:false,reason:'not-linked'}});
+    const baseline=f.requests.filter(r=>r.table==='push-device').length;
+    f.faults.push({table:'push-device',remaining:3,status:200,body:{registered:false,reason:'not-linked'}});
     await f.page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+    await wait(()=>f.requests.filter(r=>r.table==='push-device').length>baseline);
+    await f.page.clock.runFor(3000);
+    await wait(()=>f.requests.filter(r=>r.table==='push-device').length>baseline+1);
+    await f.page.clock.runFor(7000);
     const retry=f.page.getByRole('button',{name:'Reconectar avisos'});await visible(retry);
-    await visible(f.page.getByText(/ainda não está vinculado ao profissional/));
+    await visible(f.page.getByText(/Não foi possível restabelecer automaticamente o vínculo/));
     assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
     await retry.click();await retry.waitFor({state:'detached'});await noOverflow(f);
   });
   await test('Avisos: falha de identidade não confunde permissão aceita com aparelho vinculado', {push:'enabled',permissionChoice:'identity-error'}, async f=>{
+    await wait(()=>f.page.evaluate(()=>window.__pushHarness.loginCalls>=1));
+    await f.page.clock.runFor(3000);
+    await wait(()=>f.page.evaluate(()=>window.__pushHarness.loginCalls>=2));
+    await f.page.clock.runFor(7000);
     await visible(f.page.getByRole('button',{name:'Reconectar avisos'}));
     assert.equal(f.requests.some(r=>r.table==='push-device'),false);
     await visible(f.page.getByText(/não foi possível vincular este aparelho ao seu painel/));
