@@ -38,6 +38,7 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
     platform_settings: [{ id: 'settings', pix_key: 'fixture-key', pix_name: 'QA beneficiary' }], ...structuredClone(tables),
   };
   const requests = []; const exceptions = []; const faults = [];
+  const storedImages = new Map();
   if(pushFailures) faults.push({table:'push-device',remaining:pushFailures,status:200,body:{registered:false,reason:'not-linked'}});
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'America/Bahia', serviceWorkers: 'block', ...(userAgent ? {userAgent} : {}) });
   if (standalone) await context.addInitScript(() => {
@@ -180,8 +181,28 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
       return send(single ? project(affected[0] || {}) : affected.map(project), 200, { 'content-range': `0-${Math.max(0, count - 1)}/${count}` });
     }
     if (url.pathname.startsWith('/storage/v1/object/') && method === 'POST') {
-      requests.push({ table: 'storage', method, path: url.pathname });
+      const body = request.postDataBuffer();
+      const pngAt = body?.indexOf(Buffer.from([137,80,78,71,13,10,26,10])) ?? -1;
+      requests.push({ table: 'storage', method, path: url.pathname, image: pngAt >= 0 ? { width: body.readUInt32BE(pngAt + 16), height: body.readUInt32BE(pngAt + 20), colorType: body[pngAt + 25] } : null });
+      const failure = faults.find(f => f.table === 'storage' && f.remaining !== 0);
+      if (failure) { failure.remaining--; return send({ message: 'Falha simulada no upload' }, 503); }
+      if (pngAt >= 0) {
+        let end = pngAt + 8;
+        while (end + 12 <= body.length) {
+          const length = body.readUInt32BE(end); const type = body.toString('ascii',end+4,end+8);
+          if (length > body.length-end-12) break;
+          end += length+12;
+          if (type === 'IEND') { storedImages.set(url.pathname.replace('/storage/v1/object/',''),body.subarray(pngAt,end)); break; }
+        }
+      }
       return send({ Key: url.pathname.replace('/storage/v1/object/', ''), Id: 'qa-file' });
+    }
+    if (url.pathname.startsWith('/storage/v1/object/') && method === 'DELETE') {
+      requests.push({ table: 'storage', method, body: request.postDataJSON() });
+      return send([]);
+    }
+    if (url.pathname.startsWith('/storage/v1/object/public/') && method === 'GET') {
+      return route.fulfill({ status: 200, contentType: 'image/png', body: storedImages.get(url.pathname.replace('/storage/v1/object/public/','')) || Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGMUtzf6z8DAwMAEIkAYABaNAYu/+/dnAAAAAElFTkSuQmCC', 'base64') });
     }
     if (url.pathname === '/api/send-push') { requests.push({ table: 'push', method, body: request.postDataJSON() }); return send({ sent: false, reason: 'isolated_audit' }); }
     if (url.pathname === '/api/pwa-manifest') {
@@ -629,6 +650,54 @@ try {
     await wait(() => f.db.tenants[0].whatsapp.includes('98888'));
     const color = f.page.locator('input[type=color]').first(); await color.fill('#ff00ff'); await color.blur(); await wait(() => f.db.tenants[0].primary_color === '#ff00ff');
     await f.page.reload(); await f.nav('Perfil e aparência'); assert.equal(await f.page.locator('input[type=color]').first().inputValue(), '#ff00ff');
+  });
+  for (const width of [390, 1440]) {
+    await test(`Logo: envia imagem transparente, persiste e aparece no cliente — ${width}px`, {width,push:'enabled'}, async f => {
+      await f.nav('Perfil e aparência');
+      assert.equal(await f.page.getByText('Cor de texto preferida',{exact:true}).count(),0);
+      assert.equal(await f.page.locator('input[type=color]').count(),1);
+      const image=await f.page.evaluate(()=>{const c=document.createElement('canvas');c.width=1600;c.height=400;const d=c.getContext('2d');d.fillStyle='#173f32';d.fillRect(100,80,1400,240);d.fillStyle='#c9f267';d.font='bold 160px sans-serif';d.textAlign='center';d.fillText('BARBEARIA QA',800,255);return c.toDataURL('image/png').split(',')[1];});
+      const input=f.page.getByLabel('Selecionar logo do estabelecimento');
+      await input.setInputFiles({name:'marca.png',mimeType:'image/png',buffer:Buffer.from(image,'base64')});
+      await wait(()=>f.db.tenants[0].has_logo===true,'Logo was not saved');
+      const url=f.db.tenants[0].logo_url;
+      assert.match(url,new RegExp(`products/${tenantId}/branding/logo-.*\\.png$`));
+      // Multipart file bytes are exposed by Chromium; WebKit omits them in interception.
+      if(engine===chromium)assert.deepEqual(f.requests.find(r=>r.table==='storage'&&r.method==='POST').image,{width:1024,height:256,colorType:6});
+      const preview=f.page.getByAltText('Prévia da logo');await visible(preview);assert.equal(await preview.getAttribute('src'),url);
+      await wait(()=>preview.evaluate(el=>el.complete&&el.naturalWidth>0),'Uploaded preview did not load');
+      assert.equal(await f.page.locator('.sidebar-logo-img').evaluate(el=>getComputedStyle(el).objectFit),'contain');
+      await noOverflow(f);await f.page.locator('.admin-logo-editor').scrollIntoViewIfNeeded();await f.page.screenshot({path:fileURLToPath(new URL(`logo-profile-${width}.png`,output)),animations:'disabled'});
+      await f.page.reload();await f.nav('Perfil e aparência');assert.equal(await f.page.locator('.admin-logo-image img').getAttribute('src'),url);
+      const customer=await f.context.newPage();await customer.goto('https://admin-audit.test/qa/cliente/');await visible(customer.locator('.hero-logo-img'));
+      assert.equal(await customer.locator('.hero-logo-img').getAttribute('src'),url);assert.equal(await customer.locator('.hero-logo-img').evaluate(el=>getComputedStyle(el).objectFit),'contain');await customer.close();
+      await input.setInputFiles({name:'marca.png',mimeType:'image/png',buffer:Buffer.from(image,'base64')});
+      await wait(()=>f.db.tenants[0].logo_url!==url);assert.equal(f.requests.filter(r=>r.table==='storage'&&r.method==='DELETE').length,0,'Successful replacement must preserve previous files');
+      await f.page.getByRole('button',{name:'Remover logo',exact:true}).click();await wait(()=>f.db.tenants[0].has_logo===false&&f.db.tenants[0].logo_url==='');
+      await visible(f.page.getByRole('button',{name:'Adicionar logo',exact:true}));assert.equal(await f.page.locator('.sidebar-logo-img').count(),0,'Removal must restore the profession icon');
+    });
+  }
+  await test('Logo: rejeita formato, tamanho e imagem inválida sem enviar arquivo', {}, async f => {
+    await f.nav('Perfil e aparência');const input=f.page.getByLabel('Selecionar logo do estabelecimento');
+    for(const [name,mimeType,buffer,message] of [['marca.svg','image/svg+xml',Buffer.from('<svg/>'),/PNG, JPG ou WebP/],['grande.png','image/png',Buffer.alloc(5*1024*1024+1),/até 5 MB/],['quebrada.png','image/png',Buffer.from('not a PNG'),/abrir essa imagem/]]) {
+      await input.setInputFiles({name,mimeType,buffer});await visible(f.page.locator('.admin-logo-editor').getByRole('alert').filter({hasText:message}));
+      assert.equal(await f.page.getByRole('button',{name:'Adicionar logo',exact:true}).isEnabled(),true);
+    }
+    assert.equal(f.requests.filter(r=>r.table==='storage').length,0);assert.equal(f.db.tenants[0].has_logo,false);
+  });
+  for(const boundary of ['storage','tenants']) {
+    await test(`Logo: falha em ${boundary} preserva a marca anterior e permite tentar novamente`, {tenant:{has_logo:true,logo_url:'https://fixture.invalid/logo-anterior.png'}}, async f => {
+      await f.nav('Perfil e aparência');f.faults.push({table:boundary,method:'PATCH',remaining:1});
+      await f.page.getByLabel('Selecionar logo do estabelecimento').setInputFiles({name:'logo.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGMUtzf6z8DAwMAEIkAYABaNAYu/+/dnAAAAAElFTkSuQmCC','base64')});
+      await visible(f.page.locator('.admin-logo-editor').getByRole('alert'));assert.equal(f.db.tenants[0].logo_url,'https://fixture.invalid/logo-anterior.png');
+      assert.equal(await f.page.getByRole('button',{name:'Trocar logo',exact:true}).isEnabled(),true);
+      assert.equal(f.requests.filter(r=>r.table==='storage'&&r.method==='DELETE').length,boundary==='tenants'?1:0);
+      if(boundary==='tenants')assert.match(f.requests.find(r=>r.table==='storage'&&r.method==='DELETE').body.prefixes[0],new RegExp(`^products/${tenantId}/branding/logo-`));
+    });
+  }
+  await test('Logo: login profissional mostra a marca salva', {auth:false,path:'/qa/profissional/',tenant:{has_logo:true,logo_url:'https://fixture.invalid/marca.png'}}, async f => {
+    await visible(f.page.locator('.login-logo img'));assert.equal(await f.page.locator('.login-logo img').getAttribute('src'),'https://fixture.invalid/marca.png');
+    assert.equal(await f.page.locator('.login-logo img').evaluate(el=>getComputedStyle(el).objectFit),'contain');
   });
   await test('Agenda: alterna modelo e valida intervalo e almoço', {}, async f => {
     await f.nav('Atendimento e horários'); await f.page.locator('.admin-booking-option').filter({ hasText: /Horário Marcado/ }).click();

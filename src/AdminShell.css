@@ -57,6 +57,24 @@
 .admin-customer-link-dialog input { width: 100%; min-width: 0; min-height: 46px; padding: .7rem; border: 1px solid #b7cdbf; border-radius: 10px; background: #f4f7f5; color: #244e3c; font-size: .78rem; }
 .admin-customer-link-dialog form { display: flex; justify-content: flex-end; margin-top: 1rem; }
 .admin-customer-link-dialog button { min-height: 44px; padding: .65rem 1.2rem; border-radius: 10px; background: #173f32; color: #fff; font-size: .78rem; }
+.professional-admin .admin-logo-editor { margin-bottom: 1.3rem; padding: 1rem; border: 1px solid var(--panel-line); border-radius: 15px; background: #f7f9f7; }
+.professional-admin .admin-logo-editor h3 { margin: 0 0 .85rem; color: var(--panel-ink); font-size: .8rem; font-weight: 600; }
+.professional-admin .admin-logo-editor-content { display: flex; align-items: center; gap: .9rem; min-width: 0; }
+.professional-admin .admin-logo-image { display: grid; place-items: center; flex: 0 0 76px; width: 76px; height: 76px; padding: 7px; border: 1px solid #dbe5de; border-radius: 14px; background: #fff; color: #81958a; }
+.professional-admin .admin-logo-image img, .professional-admin .admin-brand-preview-mark img { width: 100%; height: 100%; object-fit: contain; }
+.professional-admin .admin-brand-preview-mark:has(img) { padding: 5px; background: #fff; }
+.professional-admin .admin-logo-editor-content p { min-width: 0; margin: 0; color: var(--panel-ink); font-size: .73rem; line-height: 1.6; }
+.professional-admin .admin-logo-editor-content small { display: block; margin-top: .4rem; color: var(--panel-muted); font-size: .66rem; }
+.professional-admin .admin-logo-editor-actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1rem; }
+.professional-admin .admin-logo-editor-actions button { min-height: 44px; padding: .65rem .9rem; border: 1px solid #173f32; border-radius: 10px; background: #173f32; color: #fff; font-size: .73rem; font-weight: 600; }
+.professional-admin .admin-logo-editor-actions .admin-logo-remove { border-color: #d3ded6; background: #fff; color: #8e4034; }
+.professional-admin .admin-logo-editor-actions button:disabled { opacity: .6; cursor: wait; }
+.professional-admin .admin-logo-editor .admin-logo-error { margin: .8rem 0 0; color: #a13e32; font-size: .72rem; line-height: 1.6; }
+.professional-admin .sidebar-logo.has-custom-logo { padding: 4px; background: #fff; }
+.professional-admin .sidebar-logo-img { object-fit: contain; border-radius: 0; }
+.tenant-login .login-logo.has-custom-logo { padding: 6px; background: #fff; }
+.tenant-login .login-logo.has-custom-logo img { border-radius: 0; }
+.customer-app .hero-logo-container.has-custom-logo .hero-logo-img { padding: 6px; border-radius: 0; }
 .professional-admin .admin-mode-pill, .professional-admin .subscription-badge { min-height: 32px; background: #f6f8f5 !important; box-shadow: none; font-size: .65rem; }
 .professional-admin .admin-content-scroll { padding: 1.8rem 2rem !important; }
 .professional-admin .admin-kpi-card, .professional-admin .admin-stat-card { min-height: 112px; border-radius: 16px !important; padding: 1.15rem !important; box-shadow: 0 3px 12px #183a2a04 !important; }

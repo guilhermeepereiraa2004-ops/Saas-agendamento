@@ -23,6 +23,7 @@ import { useBillingDay } from './lib/useBillingDay';
 import { useProfessionalPush } from './lib/useProfessionalPush';
 import { ProfessionalPushCard } from './components/ProfessionalPushCard';
 import { CustomerLinkButton } from './components/CustomerLinkButton';
+import { TenantLogoEditor } from './components/TenantLogoEditor';
 
 type AdminTab = 'atendimento' | 'agenda' | 'financial' | 'tasks' | 'store' | 'services' | 'scheduling' | 'settings';
 type WorkingHours = NonNullable<Tenant['workingHours']>;
@@ -1524,7 +1525,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
       setProfileSaveState('error');
       showToast('Erro ao atualizar perfil: ' + error.message, 'error');
     } else {
-      setTenant({ ...tenant, [field]: value });
+      setTenant(current => ({ ...current, [field]: value }));
       setProfileSaveState('saved');
       showToast('Perfil atualizado com sucesso!', 'success');
     }
@@ -2247,6 +2248,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
 
                     <div className="admin-settings-grid">
                       <div className="admin-settings-fields">
+                        <TenantLogoEditor tenantId={tenant.id} hasLogo={Boolean(tenant.hasLogo)} logoUrl={tenant.logoUrl || ''} onSaved={logo => setTenant(current => ({ ...current, ...logo }))} onSaveStateChange={setProfileSaveState} />
                         <div className="form-group">
                           <label>WhatsApp de contato</label>
                           <input 
@@ -2270,24 +2272,11 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
                           </div>
                           <small>A cor aparece nos detalhes. Botões e textos recebem um tom equilibrado para manter a leitura, inclusive no login.</small>
                         </div>
-                        <div className="form-group admin-color-field">
-                          <label>Cor de texto preferida</label>
-                          <div>
-                            <input 
-                              type="color" 
-                              value={tenant.secondaryColor || '#ffffff'} 
-                              onChange={(e) => setTenant({ ...tenant, secondaryColor: e.target.value })}
-                              onBlur={(e) => updateTenantProfile('secondaryColor', e.target.value)}
-                            />
-                            <span>{tenant.secondaryColor?.toUpperCase() || '#FFFFFF'}</span>
-                          </div>
-                          <small>O sistema corrige automaticamente o texto quando a combinação não possui contraste suficiente.</small>
-                        </div>
                       </div>
                       <aside className="admin-brand-preview" aria-label="Prévia da identidade visual">
                         <span className="admin-brand-preview-label">Prévia para o cliente</span>
                         <div className="admin-brand-preview-stage" style={customerThemeStyle}>
-                          <div className="admin-brand-preview-mark"><ProfessionIcon profession={tenant.profession} /></div>
+                          <div className="admin-brand-preview-mark">{tenant.hasLogo && tenant.logoUrl ? <img src={tenant.logoUrl} alt="Prévia da logo" /> : <ProfessionIcon profession={tenant.profession} />}</div>
                           <span>Atendimento digital</span>
                           <strong>{tenant.name}</strong>
                           <p>Uma experiência simples, organizada e com a personalidade da sua marca.</p>

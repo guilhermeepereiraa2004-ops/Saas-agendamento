@@ -86,6 +86,20 @@ try {
     assert.equal((await as('authenticated',other,'delete from storage.objects returning id')).rows.length,0);
     assert.equal((await as('authenticated',owner,'delete from storage.objects returning id')).rows.length,1);
   });
+  await test('Logo persists atomically in the own tenant and stays public without widening write access',async()=>{
+    const path=`products/${tenant}/branding/logo-fixture.png`;
+    const url=`https://example.invalid/storage/v1/object/public/product-images/${path}`;
+    await denied('anon',null,'insert into storage.objects(bucket_id,name) values($1,$2)',['product-images',path]);
+    await denied('authenticated',other,'insert into storage.objects(bucket_id,name) values($1,$2)',['product-images',path]);
+    await as('authenticated',owner,'insert into storage.objects(bucket_id,name) values($1,$2)',['product-images',path]);
+    const saved=await as('authenticated',owner,'update tenants set has_logo=true,logo_url=$1 where id=$2 returning has_logo,logo_url',[url,tenant]);
+    assert.deepEqual(saved.rows,[{has_logo:true,logo_url:url}]);
+    assert.equal((await as('authenticated',other,'update tenants set logo_url=$1 where id=$2 returning id',['https://example.invalid/other.png',tenant])).rows.length,0);
+    const publicTenant=(await as('anon',null,"select * from get_public_tenant('qa')")).rows[0].get_public_tenant;
+    assert.equal(publicTenant.has_logo,true);assert.equal(publicTenant.logo_url,url);
+    await as('authenticated',owner,"update tenants set has_logo=false,logo_url='' where id=$1",[tenant]);
+    await as('authenticated',owner,'delete from storage.objects where name=$1',[path]);
+  });
   await test('Invalid service values cannot break booking or introduce nonfinite prices',async()=>{
     for(const services of [[{id:'x',name:'Corte',price:'NaN',duration:30}],[{id:'x',name:'Corte',duration:30}],[{id:'x',name:'A',price:1},{id:'x',name:'B',price:1}]]) await denied('authenticated',owner,'update tenants set services=$1 where id=$2',[JSON.stringify(services),tenant]);
   });
