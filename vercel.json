@@ -1,4 +1,5 @@
 {
+  "buildCommand": "npm run verify:release",
   "rewrites": [
     {
       "source": "/(.*)",

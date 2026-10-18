@@ -1,6 +1,6 @@
--- Atualização do Banco de Dados para Suporte a Agendamentos Específicos
-
-ALTER TABLE queue_items 
-ADD COLUMN IF NOT EXISTS appointment_time TIMESTAMPTZ;
-
--- Nota: Certifique-se de executar este script no SQL Editor do seu Supabase.
+-- SCRIPT LEGADO DESATIVADO. Este arquivo não instala nem altera o banco.
+-- Use somente as migrações versionadas em supabase/migrations, na ordem do nome.
+-- Consulte README.md: Instalação e histórico do banco.
+do $legacy$ begin
+  raise exception 'Script legado desativado. Use supabase/migrations e as instruções atuais do README.';
+end $legacy$;

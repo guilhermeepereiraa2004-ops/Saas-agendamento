@@ -1,5 +1,6 @@
--- Migração para suporte a intervalos de agendamento e horário de almoço
-ALTER TABLE tenants 
-ADD COLUMN IF NOT EXISTS appointment_interval INTEGER DEFAULT 30,
-ADD COLUMN IF NOT EXISTS lunch_start TEXT DEFAULT '12:00',
-ADD COLUMN IF NOT EXISTS lunch_end TEXT DEFAULT '13:00';
+-- SCRIPT LEGADO DESATIVADO. Este arquivo não instala nem altera o banco.
+-- Use somente as migrações versionadas em supabase/migrations, na ordem do nome.
+-- Consulte README.md: Instalação e histórico do banco.
+do $legacy$ begin
+  raise exception 'Script legado desativado. Use supabase/migrations e as instruções atuais do README.';
+end $legacy$;

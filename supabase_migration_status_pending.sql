@@ -1,3 +1,6 @@
--- Atualizando a restrição de status para incluir 'pending', 'completed' e 'cancelled'
-ALTER TABLE queue_items DROP CONSTRAINT IF EXISTS queue_items_status_check;
-ALTER TABLE queue_items ADD CONSTRAINT queue_items_status_check CHECK (status IN ('serving', 'ready', 'waiting', 'pending', 'completed', 'cancelled'));
+-- SCRIPT LEGADO DESATIVADO. Este arquivo não instala nem altera o banco.
+-- Use somente as migrações versionadas em supabase/migrations, na ordem do nome.
+-- Consulte README.md: Instalação e histórico do banco.
+do $legacy$ begin
+  raise exception 'Script legado desativado. Use supabase/migrations e as instruções atuais do README.';
+end $legacy$;

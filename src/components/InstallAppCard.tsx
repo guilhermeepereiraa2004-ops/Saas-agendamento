@@ -12,6 +12,7 @@ export function InstallAppCard({ tenant, audience }: { tenant: Tenant; audience:
   const [message, setMessage] = useState('');
   const inFlight = useRef(false);
   const dialog = useRef<HTMLDialogElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
   const titleId = useId();
   const target = tenantAppPath(tenant.slug, audience);
   const canonical = location.pathname === target || `${location.pathname}/` === target;
@@ -57,10 +58,16 @@ export function InstallAppCard({ tenant, audience }: { tenant: Tenant; audience:
       <strong>{audience === 'professional' ? 'Seu painel sempre à mão' : 'Seu atendimento a um toque'}</strong>
       <p>{status === 'requested' && canonical ? 'Instalação solicitada. Aguarde o celular finalizar; isso pode levar alguns instantes.' : audience === 'professional' ? 'Abra direto no painel de ' + tenant.name + '.' : 'Adicione o app de ' + tenant.name + ' ao seu celular.'}</p>
     </div>
-    {status === 'requested' && canonical ? <button type="button" onClick={() => setOpen(true)}>Ver orientação</button> : canonical
-      ? <button type="button" onClick={() => void requestInstall()} disabled={busy}>{busy ? 'Aguardando…' : audience === 'professional' ? 'Instalar app profissional' : 'Instalar app'}</button>
+    {status === 'requested' && canonical ? <button ref={trigger} type="button" onClick={() => setOpen(true)}>Ver orientação</button> : canonical
+      ? <button ref={trigger} type="button" onClick={() => void requestInstall()} disabled={busy}>{busy ? 'Aguardando…' : audience === 'professional' ? 'Instalar app profissional' : 'Instalar app'}</button>
       : <a href={`${target}?instalar=1`}>{audience === 'professional' ? 'Instalar app profissional' : 'Instalar app'}</a>}
-    <dialog ref={dialog} className="install-app-dialog" aria-labelledby={titleId} onCancel={() => setOpen(false)} onClose={() => setOpen(false)}>
+    <dialog ref={dialog} className="install-app-dialog" aria-labelledby={titleId} onCancel={() => setOpen(false)} onClose={() => { setOpen(false); trigger.current?.focus(); }} onKeyDown={event => {
+      if (event.key !== 'Tab') return;
+      const buttons = event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)');
+      const first = buttons[0], last = buttons[buttons.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    }}>
       <button type="button" className="install-app-close" aria-label="Fechar orientação de instalação" onClick={() => setOpen(false)}>×</button>
       <img src="/icons/suavez-v2-192.png" width="56" height="56" alt="" />
       <span className="install-app-eyebrow">{audience === 'professional' ? 'App profissional' : 'App do cliente'}</span>

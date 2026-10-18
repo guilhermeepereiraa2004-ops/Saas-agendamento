@@ -348,6 +348,13 @@ export function loginOneSignal(externalId: string): Promise<boolean> {
   return changeIdentity(externalId);
 }
 
+export async function getOneSignalDeviceProof() {
+  const id = await getOneSignalId();
+  const subscription = runtime.client?.User.PushSubscription;
+  if (!id || subscription?.id !== id || !subscription.token) return null;
+  return { id, token: subscription.token };
+}
+
 export function logoutOneSignal(): Promise<void> {
   return changeIdentity(null).then(() => {});
 }

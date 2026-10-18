@@ -1,7 +1,6 @@
--- Atualização do Banco de Dados para Suporte a Horários Marcados
-
-ALTER TABLE tenants 
-ADD COLUMN IF NOT EXISTS booking_type TEXT DEFAULT 'queue' CHECK (booking_type IN ('queue', 'appointment')),
-ADD COLUMN IF NOT EXISTS working_hours JSONB DEFAULT '[]'::jsonb;
-
--- Nota: Certifique-se de executar este script no SQL Editor do seu Supabase.
+-- SCRIPT LEGADO DESATIVADO. Este arquivo não instala nem altera o banco.
+-- Use somente as migrações versionadas em supabase/migrations, na ordem do nome.
+-- Consulte README.md: Instalação e histórico do banco.
+do $legacy$ begin
+  raise exception 'Script legado desativado. Use supabase/migrations e as instruções atuais do README.';
+end $legacy$;

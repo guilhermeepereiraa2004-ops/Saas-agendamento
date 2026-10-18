@@ -16,6 +16,8 @@ export default { async fetch(request: Request) {
     try { payload = JSON.parse(raw); } catch { return respond({ error: 'Invalid JSON' }, 400); }
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return respond({ error: 'Cadastro inválido.' }, 400);
     const { id, tenant, password } = payload;
+    const reservedSlugs = new Set(['admin', 'recuperar-acesso', 'api', 'apps', 'assets', 'icons']);
+    if (tenant && reservedSlugs.has(tenant.slug)) return respond({ error: 'Este endereço é reservado pelo sistema. Escolha outro slug.' }, 400);
     if (!tenant || typeof tenant.name !== 'string' || !tenant.name.trim() || typeof tenant.slug !== 'string' || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(tenant.slug) || typeof tenant.login_email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(tenant.login_email) || !Number.isFinite(tenant.monthly_fee) || tenant.monthly_fee < 0 || !Number.isInteger(tenant.payment_day) || tenant.payment_day < 1 || tenant.payment_day > 31 || (password !== undefined && (typeof password !== 'string' || password.length < 12 || password.length > 128)) || (!id && !password)) return respond({ error: 'Dados do cadastro inválidos. A senha deve ter ao menos 12 caracteres.' }, 400);
     if (id && (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))) return respond({ error: 'Cadastro inválido.' }, 400);
     const allowed = ['name','slug','whatsapp','primary_color','secondary_color','has_logo','logo_url','login_email','profession','booking_type','subscription_status','next_payment_at','payment_day','monthly_fee'];

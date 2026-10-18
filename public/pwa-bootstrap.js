@@ -2,7 +2,7 @@
 // audience has a separate identity and launch route, without credentials in URLs.
 (() => {
   const route = /^\/([a-z0-9][a-z0-9-]{0,79})(?:\/(cliente|profissional))?\/?$/.exec(location.pathname);
-  if (!route || route[1] === 'admin') return;
+  if (!route || ['admin', 'recuperar-acesso'].includes(route[1])) return;
   // Public links always belong to the customer app, regardless of a staff session.
   if (!route[2]) {
     location.replace(`/${route[1]}/cliente/${location.search}${location.hash}`);

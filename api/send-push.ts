@@ -1,5 +1,5 @@
 /// <reference types="node" />
-import { verifyStaff, serverConfig } from './_lib/auth.js';
+import { verifyStaff, serverConfig, serverRpc } from './_lib/auth.js';
 import { tenantAppPath } from '../src/lib/pwa.js';
 
 type PushEventName =
@@ -29,7 +29,7 @@ type TenantRecord = {
 type EventMessage = {
   title: string;
   message: string;
-  target: { subscriptionId: string } | { externalId: string };
+  target: { subscriptionId: string } | { professional: true };
   actionLabel: string;
 };
 
@@ -116,8 +116,7 @@ async function getSupabaseRow<T>(path: string): Promise<T | null> {
 
 function buildMessage(event: PushEventName, item: QueueRecord, tenant: TenantRecord): EventMessage | null {
   const clientTarget = item.push_id ? { subscriptionId: item.push_id } : null;
-  // Um External ID reúne as assinaturas do mesmo profissional no celular e no desktop.
-  const adminTarget = { externalId: `admin_${tenant.id}` };
+  const adminTarget = { professional: true as const };
 
   if (event === 'client_joined' && adminTarget && ['waiting', 'pending'].includes(item.status)) {
     const scheduled = Boolean(item.appointment_time);
@@ -213,14 +212,16 @@ export default {
       // APP_ORIGIN was historically configured without the protocol in this project.
       // OneSignal rejects web_url unless it starts with http:// or https://.
       const appOrigin = normalizeOrigin(process.env.APP_ORIGIN) || new URL(request.url).origin;
-      const destinationUrl = `${appOrigin}${tenantAppPath(tenant.slug, 'externalId' in eventMessage.target ? 'professional' : 'customer')}`;
+      const destinationUrl = `${appOrigin}${tenantAppPath(tenant.slug, 'professional' in eventMessage.target ? 'professional' : 'customer')}`;
       const targetIdentity = 'subscriptionId' in eventMessage.target
         ? eventMessage.target.subscriptionId
-        : eventMessage.target.externalId;
+        : 'authorized-professional-devices';
       const idempotencyKey = await stableUuid(`${event}:${tenantId}:${queueItemId}:${targetIdentity}`);
-      const target = 'subscriptionId' in eventMessage.target
-        ? { include_subscription_ids: [eventMessage.target.subscriptionId] }
-        : { include_aliases: { external_id: [eventMessage.target.externalId] }, target_channel: 'push' };
+      const subscriptionIds = 'subscriptionId' in eventMessage.target
+        ? [eventMessage.target.subscriptionId]
+        : await serverRpc<string[]>('professional_push_targets', { p_tenant_id: tenantId });
+      if (!subscriptionIds.length) return json({ sent: false, reason: 'no_authorized_devices' }, 202);
+      const target = { include_subscription_ids: subscriptionIds };
 
       const oneSignalResponse = await fetch('https://api.onesignal.com/notifications?c=push', {
         method: 'POST',
@@ -241,7 +242,7 @@ export default {
           priority: 10,
           ttl: 900,
           idempotency_key: idempotencyKey,
-          custom_data: { event, queue_item_id: queueItemId, tenant_id: tenantId },
+          data: { event, queue_item_id: queueItemId, tenant_id: tenantId },
         }),
         signal: AbortSignal.timeout(10000),
       });

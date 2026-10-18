@@ -3,8 +3,9 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
-const { chromium } = require(process.env.AUDIT_PLAYWRIGHT || 'playwright');
-const browser = await chromium.launch({ channel: 'chrome', headless: true });
+const { chromium, webkit } = require(process.env.AUDIT_PLAYWRIGHT || 'playwright');
+const engine = process.env.AUDIT_BROWSER === 'webkit' ? webkit : chromium;
+const browser = await engine.launch({ ...(engine===chromium && process.env.AUDIT_BROWSER_CHANNEL ? {channel:process.env.AUDIT_BROWSER_CHANNEL} : {}), headless: true });
 let results = [];
 const filter = process.env.AUDIT_FILTER ? new RegExp(process.env.AUDIT_FILTER, 'i') : null;
 if (filter) {
@@ -53,6 +54,8 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
     const listeners = { permissionChange: new Set(), change: new Set() };
     let status = localStorage.getItem('qa_push_status') || push;
     let nativePermission = status === 'enabled' || status === 'incomplete' ? 'granted' : status === 'blocked' ? 'denied' : 'default';
+    // Linux WebKit has no native Notification API. This fixture tests our UI only.
+    if (!window.Notification) window.Notification = class Notification {};
     Object.defineProperty(Notification, 'permission', { configurable: true, get: () => nativePermission });
     const harness = { requestCalls: 0, loginCalls: 0, logoutCalls: 0, optInCalls: 0, initOptions: null };
     let finishPermission;const queued=[];
@@ -91,8 +94,14 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
 
   await context.route('**/*', async route => {
     const request = route.request(); const url = new URL(request.url()); const method = request.method();
-    const send = (data, status = 200, headers = {}) => route.fulfill({ status, contentType: 'application/json', headers, body: method === 'HEAD' ? '' : JSON.stringify(data) });
+    const cors = {'access-control-allow-origin':origin,'access-control-allow-methods':'GET,POST,PUT,PATCH,DELETE,OPTIONS','access-control-allow-headers':'authorization,apikey,content-type,x-client-info,prefer,range'};
+    if(method==='OPTIONS')return route.fulfill({status:204,headers:cors,body:''});
+    const send = (data, status = 200, headers = {}) => route.fulfill({ status, contentType: 'application/json', headers:{...cors,...headers}, body: method === 'HEAD' ? '' : JSON.stringify(data) });
     if (url.pathname.startsWith('/auth/v1/')) {
+      requests.push({table:'auth',method,path:url.pathname,body:request.postDataJSON()});
+      const failure=faults.find(f=>f.table==='auth'&&f.remaining!==0);
+      if(failure){failure.remaining--;return send(failure.body||{message:'QA auth failure'},failure.status||500);}
+      if (url.pathname.endsWith('/recover')) return send({});
       if (url.pathname.endsWith('/logout')) return send({});
       if (url.pathname.endsWith('/token')) {
         const body = request.postDataJSON();
@@ -189,14 +198,14 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
   });
   const page = await context.newPage();
   page.setDefaultTimeout(8000);
-  await page.routeWebSocket('**/realtime/**', socket => socket.close());
+  if (engine===chromium) await page.routeWebSocket('**/realtime/**', socket => socket.close());
   await page.clock.install({ time: new Date(now) });
   page.on('pageerror', error => exceptions.push(error.message));
   page.on('dialog', dialog => dialog.accept());
   const entry=path || (master?'/admin':auth?'/qa/profissional/':'/qa/cliente/');
   await page.goto(`${origin}${entry}`);
   if(entry==='/qa')await page.waitForURL('**/qa/cliente/');
-  await visible(page.locator(entry.includes('/cliente')||entry==='/qa' ? '.customer-app' : !auth && entry.includes('/profissional') ? '.tenant-login' : auth ? master ? '.admin-layout' : '.professional-admin' : master ? '.master-login' : '.customer-app').first());
+  await visible(page.locator(entry.startsWith('/recuperar-acesso') ? '.recovery-card' : entry.includes('/cliente')||entry==='/qa' ? '.customer-app' : !auth && entry.includes('/profissional') ? '.tenant-login' : auth ? master ? '.admin-layout' : '.professional-admin' : master ? '.master-login' : '.customer-app').first());
   const nav = async name => {
     const sidebar = page.locator(master ? '.sidebar-nav' : '.admin-sidebar');
     if (width < (master ? 1024 : 1021)) {
@@ -266,8 +275,10 @@ try {
     assert.match(await f.page.locator('link[rel="manifest"]').getAttribute('href'),/audience=professional/);
   });
   await test('PWA: profissional restaura painel e volta ao login ao sair', {path:'/qa/profissional/'}, async f => {
-    await visible(f.page.locator('.professional-admin'));await f.page.reload();await visible(f.page.locator('.professional-admin'));
-    await f.page.getByRole('button',{name:'Sair do Painel'}).click();await visible(f.page.locator('.tenant-login'));
+    await visible(f.page.locator('.professional-admin'));await f.page.waitForLoadState('networkidle');await f.page.reload();await visible(f.page.locator('.professional-admin'));
+    await f.page.waitForLoadState('networkidle');
+    await f.page.getByRole('button',{name:'Sair do Painel'}).click();await visible(f.page.getByRole('button',{name:'Entrar no meu painel'}));
+    await f.page.waitForLoadState('networkidle');
     await f.page.reload();await visible(f.page.locator('.tenant-login'));
   });
   await test('PWA: sair no mobile fecha painel imediatamente enquanto servidor encerra sessão', {path:'/qa/profissional/',width:390,standalone:true}, async f => {
@@ -864,15 +875,12 @@ try {
     assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
     await retry.click();await retry.waitFor({state:'detached'});await noOverflow(f);
   });
-  await test('Avisos: falha de identidade não confunde permissão aceita com aparelho vinculado', {push:'enabled',permissionChoice:'identity-error'}, async f=>{
-    await wait(()=>f.page.evaluate(()=>window.__pushHarness.loginCalls>=1));
-    await f.page.clock.runFor(3000);
-    await wait(()=>f.page.evaluate(()=>window.__pushHarness.loginCalls>=2));
-    await f.page.clock.runFor(7000);
-    await visible(f.page.getByRole('button',{name:'Reconectar avisos'}));
-    assert.equal(f.requests.some(r=>r.table==='push-device'),false);
-    await visible(f.page.getByText(/não foi possível vincular este aparelho ao seu painel/));
-    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
+  await test('Avisos: vínculo usa prova do aparelho sem reivindicar identidade pública previsível', {push:'enabled',permissionChoice:'identity-error'}, async f=>{
+    await f.nav('Perfil e aparência');await visible(f.page.getByRole('button',{name:'Enviar teste neste aparelho'}));
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.loginCalls),0);
+    const registration=f.requests.find(r=>r.table==='push-device');
+    assert.equal(registration.body.subscriptionToken,'qa-token');
+    assert.equal(registration.body.action,'status');
   });
   await test('Avisos: negar permissão mantém alerta e oferece instruções sem repetir prompt', {push:'prompt',permissionChoice:'denied'}, async f => {
     await f.page.getByRole('button',{name:'Aceitar notificações'}).click();
@@ -1012,6 +1020,38 @@ try {
   await test('Visual novo: painel profissional desktop com ações e fonte Poppins', {push:'enabled',tenant:{name:'Studio Bella',booking_type:'appointment',primary_color:'#e979b9'},tables:{queue_items:[row('one','waiting',{name:'Mariana Costa',appointment_time:now}),row('two','pending',{name:'Camila Santos',appointment_time:now})]}}, async f => {
     assert.match(await f.page.locator('.topbar-info h1').evaluate(el=>getComputedStyle(el).fontFamily),/Poppins/);
     await noOverflow(f);await f.page.evaluate(()=>document.fonts.ready);await f.page.screenshot({path:fileURLToPath(new URL('professional-desktop-final.png',output)),animations:'disabled'});
+  });
+  for (const width of [390,1440]) {
+    await test(`Recuperação: solicita link sem revelar cadastro e limita reenvio — ${width}px`, {width,auth:false,path:'/recuperar-acesso'}, async f=>{
+      await f.page.getByLabel('E-mail da conta').fill('professional@example.invalid');
+      await f.page.getByRole('button',{name:'Enviar link de recuperação'}).click();
+      await visible(f.page.getByText(/Se este e-mail estiver cadastrado/));
+      assert.equal(await f.page.getByRole('button',{name:/Reenviar em/}).isDisabled(),true);
+      const request=f.requests.find(r=>r.table==='auth'&&r.path.endsWith('/recover'));
+      assert.equal(request.body.email,'professional@example.invalid');await noOverflow(f);
+    });
+  }
+  await test('Recuperação: erro do envio libera botão e informa problema', {auth:false,path:'/recuperar-acesso'}, async f=>{
+    f.faults.push({table:'auth',remaining:1,status:429});
+    await f.page.getByLabel('E-mail da conta').fill('professional@example.invalid');
+    await f.page.getByRole('button',{name:'Enviar link de recuperação'}).click();
+    await visible(f.page.getByRole('alert'));assert.match(await f.page.getByRole('alert').innerText(),/Muitas tentativas/);
+    assert.equal(await f.page.getByRole('button',{name:'Enviar link de recuperação'}).isEnabled(),true);
+  });
+  await test('Recuperação: link inválido oferece novo envio sem formulário de senha', {auth:false,path:'/recuperar-acesso#error=access_denied&error_code=otp_expired'}, async f=>{
+    await visible(f.page.getByRole('alert'));assert.equal(await f.page.getByLabel('Nova senha',{exact:true}).count(),0);
+  });
+  await test('Recuperação: link válido atualiza senha e encerra sessões', {auth:false,path:'/recuperar-acesso#access_token=qa-verified-token&refresh_token=qa-refresh-token&expires_in=3600&token_type=bearer&type=recovery'}, async f=>{
+    await visible(f.page.getByLabel('Nova senha',{exact:true}));
+    await f.page.getByLabel('Nova senha',{exact:true}).fill('New-fixture-password123');
+    await f.page.getByLabel('Confirmar nova senha').fill('Different-fixture-123');
+    await f.page.getByRole('button',{name:'Salvar nova senha'}).click();await visible(f.page.getByText('As senhas não coincidem.'));
+    assert.equal(f.requests.some(r=>r.table==='auth'&&r.method==='PUT'),false);
+    await f.page.getByLabel('Confirmar nova senha').fill('New-fixture-password123');
+    await f.page.getByRole('button',{name:'Salvar nova senha'}).click();
+    await visible(f.page.getByRole('heading',{name:'Senha atualizada'}));
+    await wait(()=>f.requests.some(r=>r.table==='auth'&&r.path.endsWith('/logout')));
+    assert.equal(f.requests.find(r=>r.table==='auth'&&r.method==='PUT').body.password,'New-fixture-password123');
   });
 } finally {
   await browser.close();

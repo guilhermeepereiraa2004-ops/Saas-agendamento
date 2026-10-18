@@ -46,6 +46,7 @@ try{
   await test('Invalid JSON is rejected',async()=>assert.equal((await handler.fetch(request('{'))).status,400));
   await test('Oversized payload is rejected',async()=>assert.equal((await handler.fetch(request('x'.repeat(2_000_001)))).status,413));
   await test('Invalid fee, payment day and password are rejected',async()=>{
+    for(const slug of ['admin','recuperar-acesso','api']) assert.equal((await handler.fetch(request({tenant:{...profile,slug},password}))).status,400);
     for(const patch of [{monthly_fee:-1},{payment_day:45},{slug:'bad?slug'},{login_email:'invalid'}]) assert.equal((await handler.fetch(request({tenant:{...profile,...patch},password}))).status,400);
     for(const invalid of ['short',{},['invalid'],null]) assert.equal((await handler.fetch(request({tenant:profile,password:invalid}))).status,400);
     assert.equal(calls.filter(c=>c.path.includes('/admin/')).length,0);

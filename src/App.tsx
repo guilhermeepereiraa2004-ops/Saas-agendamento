@@ -10,6 +10,7 @@ import LandingPage, { BrandMark } from './LandingPage';
 import { getStaffAccess } from './lib/access';
 import { mapTenant } from './lib/tenantData';
 import { tenantRoute } from './lib/pwa';
+import PasswordRecovery from './PasswordRecovery';
 
 function App() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
@@ -23,7 +24,7 @@ function App() {
 
   useEffect(() => {
     const fetchTenants = async () => {
-      const slug = tenantRoute(currentPath)?.slug;
+      const slug = currentPath.replace(/\/$/, '') === '/recuperar-acesso' ? null : tenantRoute(currentPath)?.slug;
       if (!slug) { setIsLoading(false); return; }
       const { data, error } = await supabase.rpc('get_public_tenant', { p_slug: slug });
 
@@ -64,6 +65,8 @@ function App() {
       setAdminPassword(''); setIsAdminAuth(true);
     } finally { setSigningIn(false); }
   };
+
+  if (currentPath.replace(/\/$/, '') === '/recuperar-acesso') return <PasswordRecovery />;
 
   if (isLoading) {
     return null;
@@ -112,6 +115,7 @@ function App() {
                 <button type="submit" disabled={signingIn} className="btn-submit" style={{ width: '100%', padding: '14px', borderRadius: '8px', background: '#10b981', border: 'none', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>
                   {signingIn ? 'Entrando…' : 'Acessar Plataforma'}
                 </button>
+                <a href="/recuperar-acesso" style={{ display: 'block', textAlign: 'center', marginTop: '1rem' }}>Esqueci minha senha</a>
                 <a href="/" style={{ display: 'block', textAlign: 'center', marginTop: '1.5rem', color: '#a1a1aa', fontSize: '0.8rem', textDecoration: 'none' }}>Voltar para Home</a>
               </form>
             </div>

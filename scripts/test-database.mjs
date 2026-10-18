@@ -10,6 +10,7 @@ const second = '22222222-2222-4222-8222-222222222222';
 await db.exec(`
 create role anon; create role authenticated; create role service_role bypassrls;
 create schema auth; create table auth.users(id uuid primary key,email text);
+create table auth.sessions(id uuid primary key,user_id uuid references auth.users(id),not_after timestamptz);
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
 grant usage on schema auth to anon,authenticated,service_role; grant execute on function auth.uid() to public;
 create table tenants(id uuid primary key default gen_random_uuid(),name text,slug text unique,whatsapp text,primary_color text,secondary_color text,has_logo boolean default false,logo_url text,login_email text,login_password text,profession text,booking_type text default 'queue',working_hours jsonb default '[]',services jsonb default '[]',is_online boolean default true,is_active boolean default true,subscription_status text default 'active',monthly_fee numeric default 0,payment_day int default 10,next_payment_at timestamptz,appointment_interval int default 30,lunch_start text default '12:00',lunch_end text default '13:00',admin_push_id text,created_at timestamptz default now());
@@ -107,6 +108,30 @@ try {
   await test('Financial table bypass and cross-tenant RPC are denied', async () => {
     await denied('authenticated',owner,'insert into financial_records(tenant_id,price) values($1,35)',[tenant]);
     await denied('authenticated',other,'select complete_service($1,$2)',[tenant,queueId]);
+  });
+  await test('Push registration and recipient lists cannot be read or written by public or staff roles',async()=>{
+    for(const role of ['anon','authenticated']) {
+      await denied(role,owner,'select * from app_private.professional_push_devices');
+      await denied(role,owner,'select professional_push_targets($1)',[tenant]);
+      await denied(role,owner,'select professional_push_device($1,$2,$3,$4,$5,$6)',['register',tenant,crypto.randomUUID(),owner,crypto.randomUUID(),'a'.repeat(64)]);
+    }
+  });
+  await test('Push recipients require token proof registration, a live session and current tenant access across devices',async()=>{
+    const session=crypto.randomUUID(),session2=crypto.randomUUID(),a=crypto.randomUUID(),b=crypto.randomUUID();
+    await db.query('insert into auth.sessions(id,user_id) values($1,$2),($3,$2)',[session,owner,session2]);
+    const register=(device,sessionId,user=owner,tenantId=tenant)=>as('service_role',null,'select professional_push_device($1,$2,$3,$4,$5,$6) ok',['register',tenantId,device,user,sessionId,'a'.repeat(64)]);
+    assert.equal((await register(a,session,other)).rows[0].ok,false);
+    assert.equal((await register(a,session,owner,second)).rows[0].ok,false);
+    assert.equal((await register(a,crypto.randomUUID())).rows[0].ok,false);
+    assert.equal((await register(a,session)).rows[0].ok,true); assert.equal((await register(b,session2)).rows[0].ok,true);
+    const targets=async()=> (await as('service_role',null,'select professional_push_targets($1) targets',[tenant])).rows[0].targets;
+    assert.deepEqual(new Set(await targets()),new Set([a,b]));
+    await db.query('update auth.sessions set not_after=now()-interval \'1 second\' where id=$1',[session]);
+    assert.deepEqual(await targets(),[b]);
+    await db.query('delete from auth.sessions where id=$1',[session2]);
+    assert.deepEqual(await targets(),[]);
+    assert.equal((await db.query('select count(*)::int n from app_private.professional_push_devices where subscription_id=$1',[b])).rows[0].n,0);
+    await db.query('delete from auth.sessions where id=$1',[session]);
   });
   await test('Completion is idempotent and records exactly one receipt', async () => {
     await as('authenticated',owner,"update queue_items set status='serving',started_at='2026-10-18T10:00:00-03:00' where id=$1",[queueId]);

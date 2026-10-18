@@ -1,5 +1,44 @@
 -- Apply as postgres. Accounts are provisioned through Supabase Auth, never plaintext passwords.
 begin;
+-- Idempotent baseline: also supports a new Supabase project with no legacy tables.
+-- RLS and grants are installed in this same transaction before any table is exposed.
+create table if not exists public.tenants (
+  id uuid primary key default gen_random_uuid(), name text not null, slug text not null unique,
+  whatsapp text, primary_color text default '#173f32', secondary_color text default '#c9ee67',
+  has_logo boolean default false, logo_url text, login_email text, profession text default 'barber',
+  services jsonb default '[]', working_hours jsonb default '[]', booking_type text default 'queue',
+  is_online boolean default true, is_active boolean default true, completed_today integer default 0,
+  subscription_status text default 'active', monthly_fee numeric default 0, payment_day integer default 10,
+  next_payment_at timestamptz, appointment_interval integer default 30,
+  lunch_start text default '12:00', lunch_end text default '13:00', admin_push_id text,
+  created_at timestamptz default now()
+);
+create table if not exists public.queue_items (
+  id uuid primary key default gen_random_uuid(), tenant_id uuid not null references public.tenants(id) on delete cascade,
+  name text not null, whatsapp text not null, service_id text not null, service_name text not null,
+  price numeric not null, status text not null check(status in ('waiting','ready','serving','pending','cancelled','completed')),
+  joined_at timestamptz default now(), appointment_time timestamptz, is_on_way boolean default false,
+  push_id text, started_at timestamptz, duration integer
+);
+create table if not exists public.financial_records (
+  id uuid primary key default gen_random_uuid(), tenant_id uuid not null references public.tenants(id) on delete cascade,
+  price numeric not null, completed_at timestamptz default now()
+);
+create table if not exists public.tenant_expenses (
+  id uuid primary key default gen_random_uuid(), tenant_id uuid not null references public.tenants(id) on delete cascade,
+  description text not null, amount numeric not null, created_at timestamptz default now()
+);
+create table if not exists public.tenant_tasks (
+  id uuid primary key default gen_random_uuid(), tenant_id uuid not null references public.tenants(id) on delete cascade,
+  title text not null, is_completed boolean default false, created_at timestamptz default now()
+);
+create table if not exists public.tenant_products (
+  id uuid primary key default gen_random_uuid(), tenant_id uuid not null references public.tenants(id) on delete cascade,
+  name text not null, price numeric not null, image_url text, created_at timestamptz default now()
+);
+create table if not exists public.platform_settings (
+  id uuid primary key default gen_random_uuid(), pix_key text, pix_name text, updated_at timestamptz default now()
+);
 create schema if not exists app_private;
 revoke all on schema app_private from public, anon, authenticated;
 grant usage on schema app_private to authenticated, service_role;

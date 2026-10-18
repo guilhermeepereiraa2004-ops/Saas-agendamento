@@ -1364,6 +1364,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
     setShowLogin(true);
     setLoginPassword('');
     try {
+      await Promise.race([professionalPush.unregister().catch(() => {}), new Promise(resolve => setTimeout(resolve, 1200))]);
       const { error } = await supabase.auth.signOut({ scope: 'local' });
       if (error) {
         setIsAuthenticated(true);
@@ -1696,7 +1697,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
               </form>
 
               <div className="login-footer">
-                <p>Esqueceu sua senha? Entre em contato com o suporte do Sua Vez.</p>
+                <p><a href="/recuperar-acesso">Esqueci minha senha</a></p>
               </div>
             </div>
           </div>

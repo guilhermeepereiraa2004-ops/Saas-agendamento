@@ -8,7 +8,7 @@ Sistema de gerenciamento de filas e agendamentos multirrecursos (barbearias, lav
 2. **Configuração do Projeto**:
    - **Framework Preset**: Vite (Será detectado automaticamente).
    - **Root Directory**: `./` (Padrão).
-   - **Build Command**: `npm run build`.
+   - **Build Command**: `npm run verify:release` (também definido no `vercel.json`).
    - **Output Directory**: `dist`.
 3. **Variáveis de Ambiente**:
    No campo "Environment Variables", adicione:
@@ -16,7 +16,7 @@ Sistema de gerenciamento de filas e agendamentos multirrecursos (barbearias, lav
    - `VITE_SUPABASE_ANON_KEY`: chave pública atual do Supabase (`sb_publishable_...`). O nome da variável foi mantido por compatibilidade; ela também aceita a chave `anon` antiga durante a migração.
    - `SUPABASE_SECRET_KEY`: chave secreta atual do Supabase (`sb_secret_...`), somente no servidor. Necessária para provisionar contas e verificar o destinatário das notificações. Configure como Secret em Production. **Nunca use o prefixo `VITE_` nesta chave.** O servidor também aceita `SUPABASE_SERVICE_ROLE_KEY` por compatibilidade; `SUPABASE_SECRET_KEY` tem prioridade.
    - `VITE_ONESIGNAL_APP_ID`: ID público do aplicativo no OneSignal.
-   - `ONESIGNAL_REST_API_KEY`: chave REST privada do OneSignal. Esta variável é usada somente pela função `/api/send-push` e **nunca deve receber o prefixo `VITE_`**.
+   - `ONESIGNAL_REST_API_KEY`: chave REST privada do OneSignal. Usada apenas no servidor para enviar avisos e conferir a posse dos aparelhos. **Nunca deve receber o prefixo `VITE_`**.
    - `APP_ORIGIN`: domínio canônico da aplicação, por exemplo `https://suavez.app`.
 
    Se uma chave REST já foi publicada anteriormente como `VITE_ONESIGNAL_REST_API_KEY`, gere uma nova chave no OneSignal, configure `ONESIGNAL_REST_API_KEY` na Vercel e revogue a antiga.
@@ -52,10 +52,49 @@ npm run test:database
 node scripts/test-accounts.mjs
 
 # Testar notificações com dados e provedores simulados
-node scratch/admin-audit/push-api.mjs
+node scripts/test-push-api.mjs
+
+# Lint, testes de banco/API/compatibilidade, TypeScript e build
+npm run verify:release
+
+# Instalar navegadores de teste e executar os fluxos de interface isolados
+npx playwright install chromium webkit
+npm run test:browser
 ```
 
-A auditoria de interface está em `scratch/admin-audit/run.mjs` e usa o build de `dist`. Ela requer o pacote Playwright e o navegador Chrome; `AUDIT_PLAYWRIGHT` permite informar o caminho do pacote quando instalado fora do projeto. Relatórios, capturas e scripts específicos de contas reais permanecem fora do Git.
+A auditoria de interface está em `scratch/admin-audit/run.mjs` e usa o build de `dist`. Playwright está fixado no lockfile; por padrão usa Chromium. `AUDIT_BROWSER=webkit` seleciona WebKit; `AUDIT_BROWSER_CHANNEL=chrome` usa o Chrome instalado. `AUDIT_FILTER` seleciona cenários por expressão regular. Relatórios, capturas e scripts específicos de contas reais permanecem fora do Git. Os dados, o SDK de push e o envio de e-mails da auditoria são simulados: nenhum cliente real recebe avisos ou mensagens.
+
+O workflow `.github/workflows/quality.yml` executa as verificações e os fluxos de Chromium/WebKit em pushes para `main` e em pull requests. A compilação da Vercel também exige `verify:release`; falhas de lint, testes ou TypeScript interrompem a publicação. Os testes completos de navegador rodam no GitHub Actions e devem estar aprovados antes da promoção manual.
+
+## Banco versionado
+
+Use exclusivamente `supabase/migrations`, em ordem de timestamp. A primeira migração cria o esquema de negócio em projetos vazios e também atualiza o esquema legado sem apagar os dados comerciais. A segunda preserva detalhes dos atendimentos; a terceira protege os destinatários profissionais de push. Os nove scripts `supabase*.sql` da raiz estão desativados e falham explicitamente para impedir a reabertura acidental de políticas públicas antigas.
+
+Em um projeto novo, configure o Supabase CLI para o projeto correto e execute `supabase db push` após conferir as migrações. Em um banco existente, confira primeiro `supabase migration list`: não reaplique as migrações antigas para criar o histórico. No projeto atual, as três versões foram verificadas e registradas em `supabase_migrations.schema_migrations`, com acesso restrito. Novas alterações precisam de novos arquivos; não edite versões já registradas.
+
+Os testes `test-schema-bootstrap.mjs` e `test-database.mjs` verificam tanto uma instalação vazia quanto a atualização de um esquema legado. SMTP, OneSignal, bucket `product-images` e publicações do Realtime são configurações de infraestrutura adicionais; não reutilize os antigos scripts públicos para configurá-los.
+
+## Recuperação de senha
+
+Os logins profissional e master oferecem **Esqueci minha senha**, com a rota `/recuperar-acesso`. O Supabase valida o link e a troca da senha; a interface exige confirmação e no mínimo 12 caracteres. Após salvar, solicita o encerramento global das sessões. Erros e limites de envio liberam o botão e mostram uma mensagem. A resposta de solicitação não revela se o e-mail está cadastrado.
+
+No Supabase Authentication → URL Configuration, configure o Site URL de produção e autorize exatamente `https://saas-agendamento-swart.vercel.app/recuperar-acesso`. O modelo de recuperação em português está em `supabase/templates/reset-password.html`; use `{{ .ConfirmationURL }}` para manter a validação do Supabase.
+
+**Pendente de infraestrutura:** definir remetente e configurar SMTP em Authentication → Emails → SMTP Settings. O envio padrão do Supabase é de teste e não atende a recuperação de todos os profissionais. A interface e os testes não comprovam entrega real de e-mail. Não coloque credenciais SMTP no frontend ou no Git. Depois da configuração, teste recebimento, link expirado, nova senha e login em uma conta controlada.
+
+## Avisos profissionais por aparelho
+
+O servidor registra cada inscrição somente após validar a sessão Auth, o acesso atual ao estabelecimento e a posse do token nativo de push do navegador. A lista fica em `app_private.professional_push_devices`, inacessível ao frontend; o token é armazenado apenas como hash. O envio usa exclusivamente esses IDs validados, sem aliases públicos como `admin_<tenant>` e sem fallback para segmentos do OneSignal.
+
+Vários aparelhos podem permanecer cadastrados. Abrir ou voltar ao PWA revalida o vínculo automaticamente sem novo pedido de permissão. Após esta atualização, abra o app em cada aparelho uma vez para que seja cadastrado pelo fluxo novo. Sair revoga o vínculo daquele aparelho; sessões encerradas, expiradas e acessos removidos são filtrados no servidor. O teste manual envia somente ao próprio aparelho validado.
+
+Identity Verification por JWT do OneSignal não é usada: essa funcionalidade não atende ao Web SDK. Não ative uma exigência global de JWT no aplicativo de push para tentar proteger o PWA.
+
+### Conferência física do iPhone
+
+Os testes de WebKit cobrem rotas, recuperação, instruções de instalação, acessibilidade e visual. Há compatibilidade para `AbortSignal.any/timeout` ausentes em versões antigas do Safari. Isso não simula a instalação nem a entrega de push do iOS.
+
+Em um iPhone real com suporte a Web Push, instale cliente e profissional pelas respectivas páginas no Safari, abra cada ícone, confirme a rota correta, permita avisos dentro do app e teste uma entrada na fila com o app aberto e fechado. Confira que sair do profissional não afeta o app cliente e que outro aparelho profissional continua recebendo. Esta conferência física ainda precisa ser realizada.
 
 ## Migração para autenticação segura
 

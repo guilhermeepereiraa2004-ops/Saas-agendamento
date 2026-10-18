@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getOneSignalId, loginOneSignal } from './oneSignal';
+import { getOneSignalId } from './oneSignal';
 import { professionalPushDevice } from './professionalPush';
 
 function pause(ms: number, signal: AbortSignal) {
@@ -43,8 +43,6 @@ export function useProfessionalPush(tenantId: string, active: boolean, enabled: 
         try {
           if (delay) await pause(delay, controller.signal);
           if (current !== revision.current || controller.signal.aborted) return false;
-          const identified = await loginOneSignal(`admin_${tenantId}`);
-          if (current !== revision.current || controller.signal.aborted) return false;
           const id = await getOneSignalId();
           if (current !== revision.current || controller.signal.aborted) return false;
           subscription.current = id;
@@ -52,7 +50,6 @@ export function useProfessionalPush(tenantId: string, active: boolean, enabled: 
             if (enabled) throw new Error('A permissão está aceita, mas não foi possível recuperar a inscrição deste aparelho. Recarregue o app e tente reconectar os avisos.');
             setState('idle'); return false;
           }
-          if (!identified) throw new Error('A permissão está aceita, mas não foi possível vincular este aparelho ao seu painel. Tente reconectar os avisos.');
           const result = await professionalPushDevice(tenantId, id, 'status', controller.signal);
           if (current !== revision.current || controller.signal.aborted) return false;
           if (!result.registered) throw new Error(result.reason === 'not-subscribed'
@@ -105,5 +102,9 @@ export function useProfessionalPush(tenantId: string, active: boolean, enabled: 
       if (current === revision.current) setMessage(error instanceof Error ? error.message : 'Não foi possível enviar o teste.');
     } finally { setTesting(false); }
   };
-  return { state, message, testing, reconnect, sendTest };
+  const unregister = async () => {
+    invalidate();
+    if (subscription.current) await professionalPushDevice(tenantId, subscription.current, 'unregister');
+  };
+  return { state, message, testing, reconnect, sendTest, unregister };
 }
