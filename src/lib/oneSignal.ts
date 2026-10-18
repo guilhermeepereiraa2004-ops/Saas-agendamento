@@ -63,6 +63,8 @@ interface OneSignalClient {
     };
   };
   User: {
+    externalId?: string | null;
+    addEventListener?: (event: 'change', listener: () => void) => void;
     PushSubscription: OneSignalSubscription;
   };
 }
@@ -72,6 +74,7 @@ interface OneSignalRuntime {
   failure: Extract<NotificationPermissionResult, { id: null }> | null;
   observers: Set<() => void>;
   permissionRequest: Promise<void> | null;
+  identity?: { version: number; queue: Promise<void>; pendingId?: string | null; pending?: Promise<boolean> | null };
 }
 // Keep SDK readiness across development hot reloads, like the initialization guard.
 const runtime = window._oneSignalRuntime ??= { client: null, failure: null, observers: new Set<() => void>(), permissionRequest: null } as OneSignalRuntime;
@@ -193,8 +196,8 @@ export function initializeOneSignal() {
         allowLocalhostAsSecureOrigin: true,
         autoResubscribe: true,
         persistNotification: true,
-        notificationClickHandlerMatch: 'origin',
-        notificationClickHandlerAction: 'focus',
+        notificationClickHandlerMatch: 'exact',
+        notificationClickHandlerAction: 'navigate',
         serviceWorkerPath: '/OneSignalSDKWorker.js',
         serviceWorkerUpdaterPath: '/OneSignalSDKUpdaterWorker.js',
         notifyButton: { enable: false },
@@ -210,6 +213,7 @@ export function initializeOneSignal() {
         const updateState = () => publishPushState(oneSignal);
         oneSignal.Notifications.addEventListener('permissionChange', updateState);
         oneSignal.User.PushSubscription.addEventListener('change', updateState);
+        oneSignal.User.addEventListener?.('change', updateState);
         oneSignal.Notifications.addEventListener('foregroundWillDisplay', event => {
           const notification = event.notification || {};
           const canControlNativeDisplay = typeof event.preventDefault === 'function'
@@ -341,38 +345,48 @@ export function getOneSignalId(): Promise<string | null> {
 }
 
 export function loginOneSignal(externalId: string): Promise<boolean> {
-  return new Promise(resolve => {
-    const sdkTimeout = window.setTimeout(() => resolve(false), 15000);
-    window.OneSignalDeferred = window.OneSignalDeferred || [];
-    window.OneSignalDeferred.push(async oneSignal => {
-      try {
-        await oneSignal.login(externalId);
-        window.clearTimeout(sdkTimeout);
-        resolve(true);
-      } catch (error) {
-        window.clearTimeout(sdkTimeout);
-        console.error('OneSignal: não foi possível identificar o dispositivo.', error);
-        resolve(false);
-      }
-    });
-  });
+  return changeIdentity(externalId);
 }
 
 export function logoutOneSignal(): Promise<void> {
-  return new Promise(resolve => {
-    const sdkTimeout = window.setTimeout(resolve, 5000);
-    window.OneSignalDeferred = window.OneSignalDeferred || [];
-    window.OneSignalDeferred.push(async oneSignal => {
-      try {
-        await oneSignal.logout();
-      } catch (error) {
-        console.error('OneSignal: não foi possível encerrar a identificação do dispositivo.', error);
-      } finally {
-        window.clearTimeout(sdkTimeout);
-        resolve();
-      }
+  return changeIdentity(null).then(() => {});
+}
+
+// Do not let an old login queued during SDK loading relink a device after logout.
+function changeIdentity(externalId: string | null): Promise<boolean> {
+  const identity = runtime.identity ??= { version: 0, queue: Promise.resolve() };
+  if (identity.pending && identity.pendingId === externalId) return identity.pending;
+  const version = ++identity.version;
+  const task = new Promise<boolean>(resolve => {
+    let settled = false;
+    let unsubscribe = () => {};
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true; window.clearTimeout(timeout); unsubscribe(); resolve(ok);
+    };
+    const timeout = window.setTimeout(() => finish(false), 15000);
+    unsubscribe = observeSdk(() => {
+      if (settled) return;
+      unsubscribe();
+      if (runtime.failure) { finish(false); return; }
+      const client = runtime.client;
+      if (!client) return;
+      identity.queue = identity.queue.catch(() => {}).then(async () => {
+        if (settled || version !== identity.version) { finish(false); return; }
+        try {
+          if (externalId === null) await client.logout();
+          else await client.login(externalId);
+          finish(version === identity.version && (externalId === null || client.User.externalId === externalId));
+        } catch {
+          finish(false);
+        }
+      });
     });
   });
+  identity.pendingId = externalId;
+  identity.pending = task;
+  void task.finally(() => { if (identity.pending === task) identity.pending = null; });
+  return task;
 }
 
 export async function sendPushNotification(event: PushEventName, tenantId: string, queueItemId: string): Promise<PushSendResult> {

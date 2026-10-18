@@ -53,11 +53,11 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
     let status = localStorage.getItem('qa_push_status') || push;
     let nativePermission = status === 'enabled' || status === 'incomplete' ? 'granted' : status === 'blocked' ? 'denied' : 'default';
     Object.defineProperty(Notification, 'permission', { configurable: true, get: () => nativePermission });
-    const harness = { requestCalls: 0, loginCalls: 0, optInCalls: 0, initOptions: null };
+    const harness = { requestCalls: 0, loginCalls: 0, logoutCalls: 0, optInCalls: 0, initOptions: null };
     let finishPermission;const queued=[];
     const sdk = {
       init: async options => { harness.initOptions = options; if(permissionChoice==='origin-error') throw new Error('Can only be used on: https://production.example.invalid'); if(permissionChoice==='init-error')throw new Error('Fixture initialization failed'); },
-      login: async () => { harness.loginCalls++; }, logout: async () => {}, Slidedown: { promptPush: async () => {} },
+      login: async id => { harness.loginCalls++;if(permissionChoice==='identity-error')throw new Error('QA identity unavailable');sdk.User.externalId=id; }, logout: async () => {harness.logoutCalls++;sdk.User.externalId=null;}, Slidedown: { promptPush: async () => {} },
       Notifications: {
         permission: nativePermission === 'granted', isPushSupported: () => push !== 'unsupported',
         requestPermission: async () => {
@@ -105,6 +105,12 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
       if (body.id) Object.assign(db.tenants.find(t=>t.id===body.id),body.tenant);
       else db.tenants.push({ ...structuredClone(base),...body.tenant,id:crypto.randomUUID() });
       return send({ saved:true });
+    }
+    if (url.pathname === '/api/push-device') {
+      const body=request.postDataJSON();requests.push({table:'push-device',method,body});
+      const failure=faults.find(f=>f.table==='push-device'&&f.remaining!==0);
+      if(failure){failure.remaining--;return send(failure.body||{error:'QA push unavailable'},failure.status||502);}
+      return send(body.action==='test'?{registered:true,sent:true}:{registered:true});
     }
     if (url.pathname.startsWith('/rest/v1/')) {
       const table = url.pathname.split('/').pop();
@@ -184,9 +190,10 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
   await page.clock.install({ time: new Date(now) });
   page.on('pageerror', error => exceptions.push(error.message));
   page.on('dialog', dialog => dialog.accept());
-  await page.goto(`${origin}${path || `/${master ? 'admin' : 'qa'}`}`);
-  if (!path && !master) await page.waitForURL(/\/qa\/(cliente|profissional)\/$/);
-  await visible(page.locator(path?.includes('/cliente') ? '.customer-app' : !auth && path?.includes('/profissional') ? '.tenant-login' : auth ? master ? '.admin-layout' : '.professional-admin' : master ? '.master-login' : '.customer-app').first());
+  const entry=path || (master?'/admin':auth?'/qa/profissional/':'/qa/cliente/');
+  await page.goto(`${origin}${entry}`);
+  if(entry==='/qa')await page.waitForURL('**/qa/cliente/');
+  await visible(page.locator(entry.includes('/cliente')||entry==='/qa' ? '.customer-app' : !auth && entry.includes('/profissional') ? '.tenant-login' : auth ? master ? '.admin-layout' : '.professional-admin' : master ? '.master-login' : '.customer-app').first());
   const nav = async name => {
     const sidebar = page.locator(master ? '.sidebar-nav' : '.admin-sidebar');
     if (width < (master ? 1024 : 1021)) {
@@ -260,13 +267,42 @@ try {
     await f.page.getByRole('button',{name:'Sair do Painel'}).click();await visible(f.page.locator('.tenant-login'));
     await f.page.reload();await visible(f.page.locator('.tenant-login'));
   });
-  await test('PWA: instalação do cliente no endereço antigo leva à entrada correta', {auth:false,width:390}, async f => {
+  await test('PWA: sair no mobile fecha painel imediatamente enquanto servidor encerra sessão', {path:'/qa/profissional/',width:390,standalone:true}, async f => {
+    let release;
+    const gate=new Promise(resolve=>{release=resolve;});
+    await f.page.route('**/auth/v1/logout?*',async route=>{await gate;await route.fulfill({status:204,body:''});});
+    await f.page.locator('.mobile-menu-btn').click();
+    await f.page.getByRole('button',{name:'Sair do Painel'}).click();
+    await f.page.getByRole('button',{name:'Encerrando sessão…'}).waitFor({state:'visible',timeout:1000});
+    assert.equal(await f.page.locator('.professional-admin').count(),0);
+    assert.equal(await f.page.getByRole('button',{name:'Encerrando sessão…'}).isDisabled(),true);
+    await f.page.clock.runFor(1000);assert.equal(await f.page.locator('.professional-admin').count(),0,'Painel voltou antes de concluir a saída');
+    release();await f.page.getByRole('button',{name:'Entrar no meu painel'}).waitFor({state:'visible'});
+    await f.page.reload();await visible(f.page.locator('.tenant-login'));
+  });
+  await test('PWA: falha ao sair informa erro e mantém sessão sem anunciar saída falsa', {path:'/qa/profissional/'}, async f => {
+    await f.page.route('**/auth/v1/logout?*',route=>route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({message:'QA offline'})}));
+    await f.page.getByRole('button',{name:'Sair do Painel'}).click();
+    await visible(f.page.getByText('Não foi possível encerrar sua sessão. Confira a conexão e tente novamente.',{exact:true}));
+    await visible(f.page.locator('.professional-admin'));
+  });
+  await test('PWA: login de avisos atrasado não vincula aparelho depois de sair', {path:'/qa/profissional/',push:'sdk-delayed'}, async f => {
+    await f.page.getByRole('button',{name:'Sair do Painel'}).click();
+    await visible(f.page.getByRole('button',{name:'Entrar no meu painel'}));
+    await f.page.evaluate(()=>window.__pushHarness.flushSDK());
+    await wait(()=>f.page.evaluate(()=>window.__pushHarness.logoutCalls===1));
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.loginCalls),0);
+  });
+  await test('PWA: instalação do cliente no endereço antigo leva à entrada correta', {auth:false,width:390,path:'/qa'}, async f => {
     await f.page.getByRole('button',{name:'Instalar app',exact:true}).click();
     await visible(f.page.getByRole('dialog',{name:'Barbearia QA no seu celular'}));
     assert.equal(new URL(f.page.url()).pathname,'/qa/cliente/');assert.equal(new URL(f.page.url()).search,'');
     await noOverflow(f);
   });
-  await test('PWA: instalação profissional no endereço antigo usa app próprio', {}, async f => {
+  await test('PWA: endereço antigo com sessão profissional continua público e permite acesso explícito ao profissional', {path:'/qa'}, async f => {
+    assert.equal(f.requests.some(r=>r.table==='staff_access'),false);
+    await f.page.getByRole('button',{name:'Acessar área profissional'}).click();
+    await visible(f.page.locator('.professional-admin'));
     await f.page.getByRole('button',{name:'Instalar app profissional'}).click();
     await visible(f.page.getByRole('dialog',{name:'Barbearia QA no seu celular'}));
     assert.equal(new URL(f.page.url()).pathname,'/qa/profissional/');
@@ -639,6 +675,31 @@ try {
   await test('Avisos: dispositivo já inscrito não recebe pedido nem botão repetido', {push:'enabled'}, async f => {
     await f.nav('Financeiro');await f.nav('Serviços');
     assert.equal(await f.page.locator('.notification-permission-card').count(),0);
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
+  });
+  for(const width of [390,1440])await test(`Avisos: profissional confirma vínculo remoto e oferece teste só do aparelho em ${width}px`, {push:'enabled',width,standalone:true}, async f=>{
+    await f.nav('Perfil e aparência');
+    const button=f.page.getByRole('button',{name:'Enviar teste neste aparelho'});await visible(button);
+    assert.equal(f.requests.some(r=>r.table==='push-device'&&r.body.action==='test'),false);
+    await button.click();await visible(f.page.getByText(/Teste enviado a este aparelho/));
+    assert.equal(f.requests.filter(r=>r.table==='push-device'&&r.body.action==='test').length,1);
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);await noOverflow(f);
+    if(width===390)await f.page.screenshot({path:fileURLToPath(new URL('push-device-verified-mobile.png',output)),animations:'disabled'});
+  });
+  await test('Avisos: permissão aceita com vínculo remoto ausente mostra correção e recupera sem novo prompt', {push:'enabled',width:390}, async f=>{
+    await f.nav('Perfil e aparência');await visible(f.page.getByRole('button',{name:'Enviar teste neste aparelho'}));
+    await f.nav('Fila de agora');
+    f.faults.push({table:'push-device',remaining:1,status:200,body:{registered:false,reason:'not-linked'}});
+    await f.page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+    const retry=f.page.getByRole('button',{name:'Reconectar avisos'});await visible(retry);
+    await visible(f.page.getByText(/ainda não está vinculado ao profissional/));
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
+    await retry.click();await retry.waitFor({state:'detached'});await noOverflow(f);
+  });
+  await test('Avisos: falha de identidade não confunde permissão aceita com aparelho vinculado', {push:'enabled',permissionChoice:'identity-error'}, async f=>{
+    await visible(f.page.getByRole('button',{name:'Reconectar avisos'}));
+    assert.equal(f.requests.some(r=>r.table==='push-device'),false);
+    await visible(f.page.getByText(/não foi possível vincular este aparelho ao seu painel/));
     assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
   });
   await test('Avisos: negar permissão mantém alerta e oferece instruções sem repetir prompt', {push:'prompt',permissionChoice:'denied'}, async f => {

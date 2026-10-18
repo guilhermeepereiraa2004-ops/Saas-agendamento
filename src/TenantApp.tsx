@@ -4,7 +4,7 @@ import type { QueueItem, Tenant, TenantTask, TenantProduct, Service } from './ty
 import { supabase } from './lib/supabase';
 import FinancialView from './FinancialView';
 import { useToasts } from './lib/toast';
-import { requestNotificationPermission, getOneSignalId, sendPushNotification, getNotificationStatus, loginOneSignal, logoutOneSignal } from './lib/oneSignal';
+import { requestNotificationPermission, getOneSignalId, sendPushNotification, getNotificationStatus, logoutOneSignal } from './lib/oneSignal';
 import type { NotificationStatus } from './lib/notificationStatus';
 import { NotificationPermissionCard } from './components/NotificationPermissionCard';
 import { useAdminDrawer } from './lib/useAdminDrawer';
@@ -20,6 +20,8 @@ import { InstallAppCard } from './components/InstallAppCard';
 import { tenantAppPath, type AppAudience } from './lib/pwa';
 import { subscriptionBilling } from './lib/subscriptionBilling';
 import { useBillingDay } from './lib/useBillingDay';
+import { useProfessionalPush } from './lib/useProfessionalPush';
+import { ProfessionalPushCard } from './components/ProfessionalPushCard';
 
 type AdminTab = 'atendimento' | 'agenda' | 'financial' | 'tasks' | 'store' | 'services' | 'scheduling' | 'settings';
 type WorkingHours = NonNullable<Tenant['workingHours']>;
@@ -351,6 +353,8 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
 
   // Auth state specifics to this tenant
   const [signingIn, setSigningIn] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+  const logoutInFlight = useRef(false);
   const loginInFlight = useRef(false);
   const completionInFlight = useRef(false);
   const [loginEmail, setLoginEmail] = useState('');
@@ -393,6 +397,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
   const notificationRequestInFlight = useRef(false);
   const [notifsEnabling, setNotifsEnabling] = useState(false);
   const [notificationError, setNotificationError] = useState('');
+  const professionalPush = useProfessionalPush(tenant.id, isAuthenticated, notifsEnabled);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(max-width: 980px)');
@@ -485,7 +490,6 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
 
   const enableNotifications = async () => {
     if (notificationRequestInFlight.current) return null;
-    if (notifsEnabled) return getOneSignalId();
     notificationRequestInFlight.current = true;
     setNotifsEnabling(true);
     setNotificationError('');
@@ -515,7 +519,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
         }
       }
 
-      showToast('Notificações e aviso sonoro ativados neste dispositivo.', 'success');
+      showToast(isAuthenticated ? 'Permissão aceita. Conferindo o vínculo dos avisos com seu painel.' : 'Notificações e aviso sonoro ativados neste dispositivo.', 'success');
       return pushId;
     } catch {
       setNotificationStatus('unavailable');
@@ -534,13 +538,16 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
     // also has a staff session. Privileged access still requires membership.
     if (audience === 'customer') return;
     let live = true;
+    let revision = 0;
     const refresh = async () => {
+      const current = ++revision;
+      if (logoutInFlight.current) return;
       const allowed = await canManageTenant(tenant.id);
-      if (!live) return;
+      if (!live || current !== revision || logoutInFlight.current) return;
       // Existing shared links keep working and reach a page whose manifest
       // matches the experience before the person chooses to install.
       if (!audience) {
-        window.location.replace(tenantAppPath(tenant.slug, allowed ? 'professional' : 'customer') + window.location.search + window.location.hash);
+        window.location.replace(tenantAppPath(tenant.slug, 'customer') + window.location.search + window.location.hash);
         return;
       }
       setIsAuthenticated(allowed);
@@ -548,7 +555,15 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
       else if (audience === 'professional') setShowLogin(true);
     };
     void refresh();
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(() => { setTimeout(() => { if (live) void refresh(); }, 0); });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      revision++;
+      if (event === 'SIGNED_OUT') {
+        setIsAuthenticated(false);
+        if (audience === 'professional') setShowLogin(true);
+        return;
+      }
+      setTimeout(() => { if (live) void refresh(); }, 0);
+    });
     return () => { live = false; subscription.unsubscribe(); };
   }, [tenant.id, tenant.slug, audience]);
 
@@ -599,7 +614,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
         if (error) console.error('Não foi possível registrar este dispositivo para notificações.', error);
       };
 
-      void loginOneSignal(`admin_${tenant.id}`).then(() => syncAdminSubscription());
+      void syncAdminSubscription();
       const handlePushState = (event: Event) => {
         const detail = (event as CustomEvent<{ enabled?: boolean; id?: string | null }>).detail;
         if (detail?.enabled && detail.id) void syncAdminSubscription(detail.id);
@@ -1235,7 +1250,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
   };
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (loginInFlight.current) return;
+    if (loginInFlight.current || logoutInFlight.current) return;
     loginInFlight.current = true; setSigningIn(true);
     try {
       const { error } = await supabase.auth.signInWithPassword({ email: loginEmail.trim(), password: loginPassword });
@@ -1299,11 +1314,30 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
   };
 
   const handleLogout = async () => {
-    const { error } = await supabase.auth.signOut({ scope: 'local' });
-    if (error) { showToast('Não foi possível encerrar sua sessão. Tente novamente.', 'error'); return; }
+    if (logoutInFlight.current) return;
+    logoutInFlight.current = true;
+    setSigningOut(true);
+    setIsMobileMenuOpen(false);
     setIsAuthenticated(false);
-    if (audience === 'professional') setShowLogin(true);
-    void logoutOneSignal();
+    setShowLogin(true);
+    setLoginPassword('');
+    try {
+      const { error } = await supabase.auth.signOut({ scope: 'local' });
+      if (error) {
+        setIsAuthenticated(true);
+        setShowLogin(false);
+        showToast('Não foi possível encerrar sua sessão. Confira a conexão e tente novamente.', 'error');
+        return;
+      }
+      void logoutOneSignal();
+    } catch {
+      setIsAuthenticated(true);
+      setShowLogin(false);
+      showToast('Não foi possível encerrar sua sessão. Confira a conexão e tente novamente.', 'error');
+    } finally {
+      logoutInFlight.current = false;
+      setSigningOut(false);
+    }
   };
 
   const toggleRole = () => {
@@ -1558,7 +1592,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
       {showLogin && (
         <div className="login-page-overlay tenant-login fade-in" style={customerThemeStyle} role="dialog" aria-modal="true" aria-labelledby="professional-login-title" ref={loginDialogRef}>
           <div className="login-page-container">
-            <button type="button" className="login-back-button" onClick={() => { if (audience === 'professional') window.location.assign(tenantAppPath(tenant.slug, 'customer')); else setShowLogin(false); setShowPassword(false); }}>
+            <button type="button" disabled={signingOut} className="login-back-button" onClick={() => { if (audience === 'professional') window.location.assign(tenantAppPath(tenant.slug, 'customer')); else setShowLogin(false); setShowPassword(false); }}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
               Voltar para o site
             </button>
@@ -1613,8 +1647,8 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
                   </div>
                 </div>
 
-                <button type="submit" disabled={signingIn} className="btn-submit login-btn">
-                  {signingIn ? 'Entrando…' : 'Entrar no meu painel'}
+                <button type="submit" disabled={signingIn || signingOut} className="btn-submit login-btn">
+                  {signingOut ? 'Encerrando sessão…' : signingIn ? 'Entrando…' : 'Entrar no meu painel'}
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
                 </button>
               </form>
@@ -1907,6 +1941,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
 
             <div className="admin-content-scroll">
               <NotificationPermissionCard status={notificationStatus} busy={notifsEnabling} error={notificationError} audience="professional" onAccept={() => void enableNotifications()} />
+              {notifsEnabled && activeTab !== 'settings' && <ProfessionalPushCard push={professionalPush} />}
               <InstallAppCard tenant={tenant} audience="professional" />
 
               {activeTab === 'financial' ? (
@@ -2151,6 +2186,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
 
               ) : activeTab === 'settings' ? (
                 <div className="admin-module fade-in">
+                  {notifsEnabled && <ProfessionalPushCard push={professionalPush} settings />}
                   <div className="premium-card admin-module-card">
                     <div className="admin-module-heading">
                       <div>
