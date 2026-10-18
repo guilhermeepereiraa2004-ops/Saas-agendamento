@@ -6,7 +6,6 @@ import TenantApp from './TenantApp';
 import { supabase } from './lib/supabase';
 import { ToastProvider } from './components/ToastProvider';
 import { OneSignalInitializer } from './components/OneSignalInitializer';
-import { requestNotificationPermission } from './lib/oneSignal';
 import LandingPage, { BrandMark } from './LandingPage';
 import { getStaffAccess } from './lib/access';
 import { mapTenant } from './lib/tenantData';
@@ -62,7 +61,6 @@ function App() {
       const access = await getStaffAccess();
       if (!access?.is_master) { await supabase.auth.signOut({ scope: 'local' }); setAuthError('Esta conta não possui acesso administrativo.'); return; }
       setAdminPassword(''); setIsAdminAuth(true);
-      void requestNotificationPermission();
     } finally { setSigningIn(false); }
   };
 

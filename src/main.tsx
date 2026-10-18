@@ -4,6 +4,7 @@ import './index.css'
 import App from './App.tsx'
 import './brand.css'
 import './TenantExperience.css'
+import './AdminShell.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

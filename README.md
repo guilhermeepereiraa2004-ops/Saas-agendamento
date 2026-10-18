@@ -85,3 +85,11 @@ No Windows, `node scripts/reset-master-password.mjs --window` oferece campos pro
 
 ## 📄 Notas de Roteamento
 O arquivo `vercel.json` já está configurado para lidar com rotas de Single Page Application (SPA), garantindo que atualizações de página em sub-rotas como `/dashboard` não retornem erro 404.
+
+## Avisos e navegação do painel
+
+O pedido de notificações parte do botão **Aceitar notificações**. Entrar no painel ou confirmar uma reserva não abre o pedido automaticamente. O alerta desaparece quando o aparelho possui permissão, inscrição ativa, identificador e token de push; o estado é consultado novamente ao voltar para a aba e acompanha os eventos do SDK. Não há um marcador local que simule permissão concedida.
+
+Se a permissão estiver bloqueada, o painel mostra como liberá-la nas configurações do site. Navegadores sem suporte recebem uma orientação específica. A identificação do profissional e a sincronização da inscrição continuam no servidor, usando a sessão autenticada. Consulte a [referência oficial do OneSignal Web SDK](https://documentation.onesignal.com/docs/en/web-sdk-reference).
+
+No celular, o painel profissional oferece atalhos fixos para Hoje, Agenda ou Serviços, Financeiro e Mais. O master oferece Clientes, Financeiro e Ajustes. Os menus adicionais permitem fechar com Escape, mantêm o foco no menu aberto e restauram o foco ao fechar. Os dois painéis usam Poppins e mantêm áreas de toque com pelo menos 44 pixels nas ações principais.

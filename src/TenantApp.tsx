@@ -4,7 +4,10 @@ import type { QueueItem, Tenant, TenantTask, TenantProduct, Service } from './ty
 import { supabase } from './lib/supabase';
 import FinancialView from './FinancialView';
 import { useToasts } from './lib/toast';
-import { requestNotificationPermission, getOneSignalId, sendPushNotification, isNotificationEnabled, loginOneSignal, logoutOneSignal } from './lib/oneSignal';
+import { requestNotificationPermission, getOneSignalId, sendPushNotification, getNotificationStatus, loginOneSignal, logoutOneSignal } from './lib/oneSignal';
+import type { NotificationStatus } from './lib/notificationStatus';
+import { NotificationPermissionCard } from './components/NotificationPermissionCard';
+import { useAdminDrawer } from './lib/useAdminDrawer';
 import { playNotificationSound } from './lib/notificationSound';
 import { BrandMark } from './LandingPage';
 import { ProfessionIcon } from './components/ProfessionIcon';
@@ -355,7 +358,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const [newProductImageFile, setNewProductImageFile] = useState<File | null>(null);
   const [newProductImagePreview, setNewProductImagePreview] = useState<string>('');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isCompactAdmin, setIsCompactAdmin] = useState(() => window.matchMedia('(max-width: 1020px)').matches);
+  const isCompactAdmin = useAdminDrawer(isMobileMenuOpen, setIsMobileMenuOpen, 'professional-admin-menu');
   const [isAdminAddModalOpen, setIsAdminAddModalOpen] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [showLeaveModal, setShowLeaveModal] = useState(false);
@@ -372,18 +375,10 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   const [newServiceDuration, setNewServiceDuration] = useState('30');
   const [profileSaveState, setProfileSaveState] = useState<'saved' | 'saving' | 'error'>('saved');
 
-  const [notifsEnabled, setNotifsEnabled] = useState(false);
+  const [notificationStatus, setNotificationStatus] = useState<NotificationStatus>('checking');
+  const notifsEnabled = notificationStatus === 'enabled';
+  const notificationRequestInFlight = useRef(false);
   const [notifsEnabling, setNotifsEnabling] = useState(false);
-
-  useEffect(() => {
-    const mediaQuery = window.matchMedia('(max-width: 1020px)');
-    const handleChange = (event: MediaQueryListEvent) => {
-      setIsCompactAdmin(event.matches);
-      if (!event.matches) setIsMobileMenuOpen(false);
-    };
-    mediaQuery.addEventListener('change', handleChange);
-    return () => mediaQuery.removeEventListener('change', handleChange);
-  }, []);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(max-width: 980px)');
@@ -447,27 +442,42 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
   }, [isAdminAddModalOpen, showServiceModal, showAdminDeleteModal]);
 
   useEffect(() => {
+    let live = true;
+    let revision = 0;
     const checkNotifs = async () => {
-      const enabled = await isNotificationEnabled();
-      setNotifsEnabled(enabled);
+      const current = ++revision;
+      const status = await getNotificationStatus();
+      if (live && current === revision) setNotificationStatus(status);
     };
-    checkNotifs();
+    void checkNotifs();
     const handlePushState = (event: Event) => {
-      const detail = (event as CustomEvent<{ enabled?: boolean }>).detail;
-      setNotifsEnabled(Boolean(detail?.enabled));
+      revision++;
+      const detail = (event as CustomEvent<{ status?: NotificationStatus; enabled?: boolean }>).detail;
+      if (detail?.status) setNotificationStatus(detail.status);
+      else void checkNotifs();
     };
+    const onVisible = () => { if (document.visibilityState === 'visible') void checkNotifs(); };
     window.addEventListener('suavez:push-state', handlePushState);
-    return () => window.removeEventListener('suavez:push-state', handlePushState);
+    window.addEventListener('focus', checkNotifs);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      live = false;
+      window.removeEventListener('suavez:push-state', handlePushState);
+      window.removeEventListener('focus', checkNotifs);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
 
   const enableNotifications = async () => {
-    if (notifsEnabling) return null;
+    if (notificationRequestInFlight.current) return null;
+    if (notifsEnabled) return getOneSignalId();
+    notificationRequestInFlight.current = true;
     setNotifsEnabling(true);
 
     try {
-      if (isAuthenticated) await loginOneSignal(`admin_${tenant.id}`);
       const pushId = await requestNotificationPermission();
       if (!pushId) {
+        setNotificationStatus(await getNotificationStatus());
         const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent);
         const isStandalone = window.matchMedia('(display-mode: standalone)').matches
           || Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
@@ -480,6 +490,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         return null;
       }
 
+      setNotificationStatus('enabled');
       if (isAuthenticated) {
         const { error } = await supabase.from('tenants').update({ admin_push_id: pushId }).eq('id', tenant.id);
         if (error) {
@@ -494,10 +505,14 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         }
       }
 
-      setNotifsEnabled(true);
       showToast('Notificações e aviso sonoro ativados neste dispositivo.', 'success');
       return pushId;
+    } catch {
+      setNotificationStatus('unavailable');
+      showToast('Não foi possível ativar os avisos. Confira sua conexão e tente novamente.', 'warning');
+      return null;
     } finally {
+      notificationRequestInFlight.current = false;
       setNotifsEnabling(false);
     }
   };
@@ -551,8 +566,6 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       fetchTasks();
       fetchProducts();
 
-      void loginOneSignal(`admin_${tenant.id}`);
-
       const syncAdminSubscription = async (providedId?: string | null) => {
         const pushId = providedId === undefined ? await getOneSignalId() : providedId;
         if (!pushId) return;
@@ -560,7 +573,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
         if (error) console.error('Não foi possível registrar este dispositivo para notificações.', error);
       };
 
-      void syncAdminSubscription();
+      void loginOneSignal(`admin_${tenant.id}`).then(() => syncAdminSubscription());
       const handlePushState = (event: Event) => {
         const detail = (event as CustomEvent<{ enabled?: boolean; id?: string | null }>).detail;
         if (detail?.enabled && detail.id) void syncAdminSubscription(detail.id);
@@ -1207,11 +1220,6 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
       setLoginPassword(''); setShowPassword(false);
       showToast('Login realizado com sucesso!', 'success');
       
-      void loginOneSignal(`admin_${tenant.id}`).then(() => requestNotificationPermission()).then(async pushId => {
-        if (!pushId) return;
-        const { error } = await supabase.from('tenants').update({ admin_push_id: pushId }).eq('id', tenant.id);
-        if (error) showToast('Login realizado, mas as notificações não puderam ser ativadas.', 'warning');
-      });
     } finally { loginInFlight.current = false; setSigningIn(false); }
   };
 
@@ -1605,6 +1613,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
             aria-hidden={isCompactAdmin && !isMobileMenuOpen ? true : undefined}
             inert={isCompactAdmin && !isMobileMenuOpen ? true : undefined}
           >
+            <button type="button" className="admin-drawer-close" onClick={() => setIsMobileMenuOpen(false)} aria-label="Fechar menu de navegação"><span>Menu do painel</span><span aria-hidden="true">×</span></button>
             <div className="sidebar-header">
               <div className={`sidebar-logo ${tenant.hasLogo && tenant.logoUrl ? 'has-custom-logo' : 'has-profession-icon'}`}>
                 {tenant.hasLogo && tenant.logoUrl ? (
@@ -1627,7 +1636,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                     <button
                       key={item.id}
                       className={`nav-item ${activeTab === item.id ? 'active' : ''}`}
-                      onClick={() => { setActiveTab(item.id); setIsMobileMenuOpen(false); }}
+                      onClick={() => { setActiveTab(item.id); setIsMobileMenuOpen(false); document.querySelector('.admin-content-scroll')?.scrollTo({ top: 0 }); }}
                       aria-current={activeTab === item.id ? 'page' : undefined}
                     >
                       <AdminNavIcon tab={item.id} />
@@ -1663,6 +1672,15 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
               </button>
             </div>
           </aside>
+
+          <nav className="admin-bottom-nav" aria-label="Acessos rápidos do painel">
+            {([
+              { id: 'atendimento', label: 'Hoje' },
+              tenant.bookingType === 'appointment' ? { id: 'agenda', label: 'Agenda' } : { id: 'services', label: 'Serviços' },
+              { id: 'financial', label: 'Financeiro' },
+            ] as Array<{ id: AdminTab; label: string }>).map(item => <button type="button" key={item.id} onClick={() => { setActiveTab(item.id); setIsMobileMenuOpen(false); document.querySelector('.admin-content-scroll')?.scrollTo({ top: 0 }); }} aria-current={activeTab === item.id ? 'page' : undefined}><AdminNavIcon tab={item.id}/><span>{item.label}</span></button>)}
+            <button type="button" onClick={() => setIsMobileMenuOpen(true)} aria-expanded={isMobileMenuOpen} aria-controls="professional-admin-menu"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span>Mais</span></button>
+          </nav>
 
           {/* MAIN CONTENT */}
           <main className="admin-main-content">
@@ -1739,16 +1757,6 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                 </div>
               </div>
               <div className="topbar-actions">
-                  <button
-                    type="button"
-                    className={`admin-notification-toggle ${notifsEnabled ? 'enabled' : ''}`}
-                    onClick={() => void enableNotifications()}
-                    disabled={notifsEnabling}
-                    aria-label={notifsEnabled ? 'Notificações ativas neste dispositivo' : 'Ativar notificações neste dispositivo'}
-                  >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-                    <span>{notifsEnabled ? 'Avisos ativos' : notifsEnabling ? 'Ativando…' : 'Ativar avisos'}</span>
-                  </button>
                   <div className="admin-mode-pill">
                     <span>{tenant.bookingType === 'queue' ? 'Ordem de chegada' : 'Horário marcado'}</span>
                     {(activeTab === 'atendimento' || activeTab === 'agenda') && (
@@ -1869,20 +1877,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
              )}
 
             <div className="admin-content-scroll">
-              {!notifsEnabled && (
-                <section className="notification-opt-in notification-opt-in--admin" aria-label="Ativar notificações">
-                  <span className="notification-opt-in__icon" aria-hidden="true">
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-                  </span>
-                  <span className="notification-opt-in__copy">
-                    <strong>Receba avisos de novos clientes</strong>
-                    <small>Ative neste aparelho para ser avisado mesmo com o painel fechado.</small>
-                  </span>
-                  <button type="button" onClick={() => void enableNotifications()} disabled={notifsEnabling}>
-                    {notifsEnabling ? 'Ativando…' : 'Ativar notificações'}
-                  </button>
-                </section>
-              )}
+              <NotificationPermissionCard status={notificationStatus} busy={notifsEnabling} audience="professional" onAccept={() => void enableNotifications()} />
 
               {activeTab === 'financial' ? (
                 <div className="admin-module fade-in"><FinancialView tenantId={tenant.id} /></div>
@@ -2457,13 +2452,15 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                   </div>
                   <div className="admin-queue-list-section">
                     <div className="section-header admin-module-heading">
-                      <div><span className="admin-eyebrow">Fluxo do atendimento</span><h2 className="admin-module-title">{tenant.bookingType === 'queue' ? 'Fila atual' : 'Compromissos confirmados'}</h2><p className="admin-module-copy">Use a ação principal de cada cartão para conduzir o próximo passo.</p></div>
+                      <div><span className="admin-eyebrow">Fluxo do atendimento</span><h2 className="admin-module-title">{tenant.bookingType === 'queue' ? 'Fila atual' : 'Compromissos confirmados'}</h2><p className="admin-module-copy">Acompanhe os clientes e avance cada atendimento.</p></div>
                       <div className="live-indicator"><span className="live-dot"></span>AO VIVO</div>
                     </div>
                     <div className="admin-queue-list">
                       {activeTodayQueue.length === 0 ? (
-                        <div className="empty-state" style={{ padding: '4rem', textAlign: 'center', borderRadius: '20px', border: '2px dashed rgba(0,0,0,0.05)' }}>
+                        <div className="empty-state admin-empty-state">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M16 3v4M8 3v4M3 11h18m-13 5h3m3 0h2"/></svg>
                           <p style={{ color: '#64748b', fontWeight: 500 }}>Nenhum atendimento confirmado para hoje.</p>
+                          <small>{tenant.bookingType === 'appointment' ? 'Os agendamentos aprovados aparecem aqui, prontos para iniciar o atendimento.' : 'Os clientes que entrarem na fila aparecem aqui, na ordem de chegada.'}</small>
                         </div>
                       ) : activeTodayQueue.map((item, index) => (
                         <div key={item.id} className={`admin-queue-item ${item.status}`}>
@@ -2851,21 +2848,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
             </div>
           </section>
 
-          {!notifsEnabled && myItemsInQueue.length > 0 && (
-            <section className="notification-opt-in notification-opt-in--customer" aria-label="Ativar notificações">
-              <span className="notification-opt-in__icon" aria-hidden="true">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-              </span>
-              <span className="notification-opt-in__copy">
-                <strong>Não perca sua vez</strong>
-                <small>Ative os avisos para receber a chamada do profissional neste celular.</small>
-              </span>
-              <button type="button" onClick={() => void enableNotifications()} disabled={notifsEnabling}>
-                {notifsEnabling ? 'Ativando…' : 'Ativar notificações'}
-              </button>
-            </section>
-          )}
-
+          {myItemsInQueue.length > 0 && <NotificationPermissionCard status={notificationStatus} busy={notifsEnabling} audience="customer" onAccept={() => void enableNotifications()} />}
           {/* Client Content */}
           <div className="status-summary-container customer-status-grid fade-in">
             <div className="status-summary-card serving">
@@ -2968,21 +2951,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
                         </div>
                         <div className="monitor-footer">
                           <div className="live-indicator"><span className="live-dot"></span>AO VIVO</div>
-                          <div 
-                            onClick={() => void enableNotifications()}
-                            style={{ 
-                              fontSize: '0.65rem', 
-                              display: 'flex', 
-                              alignItems: 'center', 
-                              gap: '4px', 
-                              color: notifsEnabled ? 'var(--accent-primary)' : '#ef4444',
-                              cursor: 'pointer',
-                              fontWeight: 600
-                            }}
-                          >
-                            <div style={{ width: '5px', height: '5px', borderRadius: '50%', background: 'currentColor' }}></div>
-                            {notifsEnabled ? 'NOTIFICAÇÕES ATIVAS' : 'NOTIFICAÇÕES DESATIVADAS'}
-                          </div>
+                          {!notifsEnabled && <span className="monitor-notification-hint">Ative os avisos no alerta acima</span>}
                         </div>
                       </div>
 
@@ -3410,7 +3379,7 @@ export default function TenantApp({ tenant: initialTenant }: { tenant: Tenant })
               <button 
                 onClick={async () => {
                   setShowJoinConfirmation(false);
-                  const pushId = import.meta.env.PROD ? await enableNotifications() : null;
+                  const pushId = await getOneSignalId();
                   await confirmJoinQueue(pushId);
                 }} 
                 className="btn-submit"

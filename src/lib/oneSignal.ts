@@ -1,6 +1,7 @@
 import { customerTokens } from './customerTokens';
 import { playNotificationSound, unlockNotificationSound } from './notificationSound';
 import { authorizationHeaders } from './access';
+import { resolveNotificationStatus, type NotificationStatus } from './notificationStatus';
 
 export type PushEventName =
   | 'client_joined'
@@ -92,14 +93,37 @@ function getPushState(oneSignal: OneSignalClient): PushState {
 
 function publishPushState(oneSignal: OneSignalClient) {
   const detail = getPushState(oneSignal);
+  const status = readNotificationStatus(oneSignal);
   window.dispatchEvent(new CustomEvent('suavez:push-state', {
-    detail: { ...detail, enabled: detail.permission && detail.optedIn && Boolean(detail.id && detail.token) },
+    detail: { ...detail, status, enabled: status === 'enabled' },
   }));
 }
 
+function readNotificationStatus(oneSignal: OneSignalClient): NotificationStatus {
+  return resolveNotificationStatus({
+    ...getPushState(oneSignal),
+    supported: oneSignal.Notifications.isPushSupported(),
+    nativePermission: typeof Notification === 'undefined' ? undefined : Notification.permission,
+  });
+}
+
+export function getNotificationStatus(): Promise<NotificationStatus> {
+  return new Promise(resolve => {
+    const fallback: NotificationStatus = typeof Notification === 'undefined' ? 'unsupported'
+      : Notification.permission === 'denied' ? 'blocked' : 'unavailable';
+    const timeout = window.setTimeout(() => resolve(fallback), 3500);
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    window.OneSignalDeferred.push(oneSignal => {
+      window.clearTimeout(timeout);
+      try { resolve(readNotificationStatus(oneSignal)); } catch { resolve(fallback); }
+    });
+  });
+}
+
 function waitForSubscriptionId(oneSignal: OneSignalClient, timeoutMs = 12000): Promise<string | null> {
+  const ready = () => readNotificationStatus(oneSignal) === 'enabled';
   const currentId = oneSignal.User.PushSubscription.id;
-  if (currentId) return Promise.resolve(currentId);
+  if (currentId && ready()) return Promise.resolve(currentId);
 
   return new Promise(resolve => {
     let settled = false;
@@ -112,9 +136,9 @@ function waitForSubscriptionId(oneSignal: OneSignalClient, timeoutMs = 12000): P
     };
     const onChange = (event: SubscriptionChangeEvent) => {
       const id = event.current?.id || oneSignal.User.PushSubscription.id;
-      if (id) finish(id);
+      if (id && ready()) finish(id);
     };
-    const timeout = window.setTimeout(() => finish(oneSignal.User.PushSubscription.id || null), timeoutMs);
+    const timeout = window.setTimeout(() => finish(ready() ? oneSignal.User.PushSubscription.id : null), timeoutMs);
     oneSignal.User.PushSubscription.addEventListener('change', onChange);
   });
 }
@@ -145,6 +169,8 @@ export function initializeOneSignal() {
         notificationClickHandlerAction: 'focus',
         serviceWorkerPath: '/OneSignalSDKWorker.js',
         serviceWorkerUpdaterPath: '/OneSignalSDKUpdaterWorker.js',
+        notifyButton: { enable: false },
+        promptOptions: { slidedown: { prompts: [{ type: 'push', autoPrompt: false }] } },
       });
 
       if (!window._oneSignalListenersRegistered) {
@@ -189,6 +215,14 @@ export function requestNotificationPermission(): Promise<string | null> {
     window.OneSignalDeferred = window.OneSignalDeferred || [];
     window.OneSignalDeferred.push(async oneSignal => {
       try {
+        // The permission request must run before identity/network work in the click handler.
+        window.clearTimeout(sdkTimeout);
+        if (typeof Notification !== 'undefined' && Notification.permission === 'denied') {
+          publishPushState(oneSignal);
+          window.clearTimeout(sdkTimeout);
+          resolve(null);
+          return;
+        }
         if (!oneSignal.Notifications.isPushSupported()) {
           console.warn('OneSignal: este navegador não oferece suporte a push web.');
           publishPushState(oneSignal);
@@ -197,7 +231,7 @@ export function requestNotificationPermission(): Promise<string | null> {
           return;
         }
 
-        if (!oneSignal.Notifications.permission) {
+        if (!oneSignal.Notifications.permission || (typeof Notification !== 'undefined' && Notification.permission === 'default')) {
           // O botão da aplicação já funciona como pre-prompt. A solicitação nativa
           // precisa acontecer diretamente dentro do gesto do usuário, sobretudo no mobile.
           await oneSignal.Notifications.requestPermission();
@@ -228,15 +262,7 @@ export function requestNotificationPermission(): Promise<string | null> {
 }
 
 export function isNotificationEnabled(): Promise<boolean> {
-  return new Promise(resolve => {
-    const timeout = window.setTimeout(() => resolve(false), 2500);
-    window.OneSignalDeferred = window.OneSignalDeferred || [];
-    window.OneSignalDeferred.push(oneSignal => {
-      window.clearTimeout(timeout);
-      const state = getPushState(oneSignal);
-      resolve(state.permission && state.optedIn && Boolean(state.id && state.token));
-    });
-  });
+  return getNotificationStatus().then(status => status === 'enabled');
 }
 
 export function getOneSignalId(): Promise<string | null> {
@@ -244,7 +270,8 @@ export function getOneSignalId(): Promise<string | null> {
     const sdkTimeout = window.setTimeout(() => resolve(null), 13000);
     window.OneSignalDeferred = window.OneSignalDeferred || [];
     window.OneSignalDeferred.push(async oneSignal => {
-      if (!oneSignal.Notifications.permission || !oneSignal.User.PushSubscription.optedIn) {
+      if (!oneSignal.Notifications.permission || !oneSignal.User.PushSubscription.optedIn
+        || (typeof Notification !== 'undefined' && Notification.permission !== 'granted')) {
         window.clearTimeout(sdkTimeout);
         resolve(null);
         return;

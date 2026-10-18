@@ -31,7 +31,7 @@ async function wait(check, message = 'State did not update', ms = 7500) {
 }
 async function visible(locator) { await locator.waitFor({ state: 'visible' }); }
 const field = (page, text) => page.locator('.form-group').filter({ has: page.locator('label').filter({ hasText: new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }) }).first().locator('input, select').first();
-async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, forged = false, master = false, delay = 0 } = {}) {
+async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, forged = false, master = false, delay = 0, push = 'unsupported', permissionChoice = 'granted' } = {}) {
   const db = {
     tenants: [structuredClone({ ...base, ...tenant })], queue_items: [], tenant_tasks: [], tenant_products: [], tenant_expenses: [], financial_records: [],
     platform_settings: [{ id: 'settings', pix_key: 'fixture-key', pix_name: 'QA beneficiary' }], ...structuredClone(tables),
@@ -40,13 +40,46 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'America/Bahia', serviceWorkers: 'block' });
   const user = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', email: base.login_email, aud: 'authenticated', role: 'authenticated' };
   const session = { access_token: 'qa-verified-token', refresh_token: 'qa-refresh-token', expires_at: 9999999999, expires_in: 3600, token_type: 'bearer', user };
-  await context.addInitScript(({ auth, forged, master, session }) => {
+  await context.addInitScript(({ auth, forged, master, session, push, permissionChoice }) => {
     if (forged) localStorage.setItem(master ? 'admin_auth' : 'suavez_auth_qa', 'true');
     if (auth) localStorage.setItem('sb-tfquhfhmmnbwntmkfkdo-auth-token', JSON.stringify(session));
-    // Unsupported push SDK fixture: never contacts real devices or providers.
-    const sdk = { init: async () => {}, login: async () => {}, logout: async () => {}, Slidedown: { promptPush: async () => {} }, Notifications: { permission: false, isPushSupported: () => false, addEventListener: () => {}, requestPermission: async () => {} }, User: { PushSubscription: { id: null, token: null, optedIn: false, addEventListener: () => {}, removeEventListener: () => {}, optIn: async () => {} } } };
+    // Isolated SDK and browser permission: never requests native permission or contacts devices.
+    const listeners = { permissionChange: new Set(), change: new Set() };
+    let status = localStorage.getItem('qa_push_status') || push;
+    let nativePermission = status === 'enabled' || status === 'incomplete' ? 'granted' : status === 'blocked' ? 'denied' : 'default';
+    Object.defineProperty(Notification, 'permission', { configurable: true, get: () => nativePermission });
+    const harness = { requestCalls: 0, loginCalls: 0, initOptions: null };
+    const sdk = {
+      init: async options => { harness.initOptions = options; },
+      login: async () => { harness.loginCalls++; }, logout: async () => {}, Slidedown: { promptPush: async () => {} },
+      Notifications: {
+        permission: nativePermission === 'granted', isPushSupported: () => push !== 'unsupported',
+        requestPermission: async () => {
+          harness.requestCalls++;
+          if (permissionChoice === 'error') throw new Error('Fixture SDK unavailable');
+          setStatus(permissionChoice === 'granted' ? 'enabled' : permissionChoice === 'denied' ? 'blocked' : 'prompt');
+        },
+        addEventListener: (event, callback) => listeners[event]?.add(callback),
+      },
+      User: { PushSubscription: { id: null, token: null, optedIn: false,
+        addEventListener: (_event, callback) => listeners.change.add(callback),
+        removeEventListener: (_event, callback) => listeners.change.delete(callback),
+        optIn: async () => setStatus('enabled'),
+      } },
+    };
+    function setStatus(value) {
+      status = value; localStorage.setItem('qa_push_status',value);
+      nativePermission = value === 'enabled' || value === 'incomplete' ? 'granted' : value === 'blocked' ? 'denied' : 'default';
+      sdk.Notifications.permission = nativePermission === 'granted';
+      Object.assign(sdk.User.PushSubscription, { id: value === 'enabled' || value === 'incomplete' ? 'qa-subscription' : null, token: value === 'enabled' ? 'qa-token' : null, optedIn: value === 'enabled' || value === 'incomplete' });
+      for(const callback of listeners.permissionChange) callback(sdk.Notifications.permission);
+      for(const callback of listeners.change) callback({ current: {id:sdk.User.PushSubscription.id} });
+    }
+    setStatus(status);
+    window.__pushHarness = Object.assign(harness,{setStatus,setNativePermission: value => { nativePermission=value; }});
     window.OneSignalDeferred = { push: fn => Promise.resolve().then(() => fn(sdk)).catch(() => {}) };
-  }, { auth, forged, master, session });
+  }, { auth, forged, master, session, push, permissionChoice });
+
   await context.route('**/*', async route => {
     const request = route.request(); const url = new URL(request.url()); const method = request.method();
     const send = (data, status = 200, headers = {}) => route.fulfill({ status, contentType: 'application/json', headers, body: method === 'HEAD' ? '' : JSON.stringify(data) });
@@ -130,6 +163,7 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
       const body = await readFile(new URL(`../../dist/${asset}`, import.meta.url));
       return route.fulfill({ status: 200, contentType: asset.endsWith('.js') ? 'application/javascript' : asset.endsWith('.css') ? 'text/css' : 'text/html', body });
     }
+    if(process.env.AUDIT_FONTS==='1' && ['fonts.googleapis.com','fonts.gstatic.com'].includes(url.hostname)) return route.continue();
     return route.abort();
   });
   const page = await context.newPage();
@@ -463,9 +497,99 @@ try {
   await test('Adicional: navegação master em celular 390px', { master: true, width: 390 }, async f => {
     for (const tab of ['SaaS Financeiro', 'Configurações', 'Estabelecimentos']) { await f.nav(tab); await noOverflow(f); }
   });
+  await test('Avisos: aceite explícito remove o alerta e persiste ao recarregar', {push:'prompt'}, async f => {
+    const card=f.page.getByRole('status',{name:'Permissão de notificações'});await visible(card);
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
+    await card.getByRole('button',{name:'Aceitar notificações'}).click();await card.waitFor({state:'detached'});
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),1);
+    await f.page.reload();await visible(f.page.locator('.professional-admin'));
+    assert.equal(await f.page.locator('.notification-permission-card').count(),0);
+    assert.equal(await f.page.getByText('Avisos ativos',{exact:true}).count(),0);
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
+  });
+  await test('Avisos: dispositivo já inscrito não recebe pedido nem botão repetido', {push:'enabled'}, async f => {
+    await f.nav('Financeiro');await f.nav('Serviços');
+    assert.equal(await f.page.locator('.notification-permission-card').count(),0);
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
+  });
+  await test('Avisos: negar permissão mantém alerta e oferece instruções sem repetir prompt', {push:'prompt',permissionChoice:'denied'}, async f => {
+    await f.page.getByRole('button',{name:'Aceitar notificações'}).click();
+    await visible(f.page.getByRole('alert',{name:'Permissão de notificações'}));
+    assert.equal(await f.page.getByRole('button',{name:'Aceitar notificações'}).count(),0);
+    await f.page.getByText('Como permitir as notificações',{exact:true}).click();
+    await visible(f.page.getByText(/Toque no ícone ao lado do endereço/));
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),1);
+  });
+  await test('Avisos: permissão revogada reaparece e volta a sumir quando restaurada', {push:'enabled'}, async f => {
+    await f.page.evaluate(()=>window.__pushHarness.setStatus('blocked'));
+    await visible(f.page.getByRole('alert',{name:'Permissão de notificações'}));
+    await f.page.evaluate(()=>window.__pushHarness.setStatus('enabled'));
+    await f.page.locator('.notification-permission-card').waitFor({state:'detached'});
+  });
+  await test('Avisos: navegador sem suporte informa limitação sem botão inoperante', {push:'unsupported'}, async f => {
+    await visible(f.page.getByText('Avisos indisponíveis neste navegador',{exact:true}));
+    assert.equal(await f.page.getByRole('button',{name:'Aceitar notificações'}).count(),0);
+  });
+  await test('Avisos: SDK com falha não anuncia ativação e permite nova tentativa', {push:'prompt',permissionChoice:'error'}, async f => {
+    await f.page.getByRole('button',{name:'Aceitar notificações'}).click();
+    await visible(f.page.getByRole('button',{name:'Aceitar notificações'}));
+    assert.equal(await f.page.getByText('Notificações e aviso sonoro ativados neste dispositivo.',{exact:true}).count(),0);
+  });
+  await test('Avisos: aceite sem token não é considerado ativo antes da inscrição completa', {push:'incomplete'}, async f => {
+    const button=f.page.getByRole('button',{name:'Aceitar notificações'});await visible(button);await button.click();
+    assert.equal(await f.page.locator('.notification-permission-card').count(),1);
+    await f.page.evaluate(()=>window.__pushHarness.setStatus('enabled'));
+    await f.page.locator('.notification-permission-card').waitFor({state:'detached'});
+  });
+  await test('Avisos: revogação no navegador é detectada ao voltar para a aba', {push:'enabled'}, async f => {
+    await f.page.evaluate(()=>{window.__pushHarness.setNativePermission('denied');window.dispatchEvent(new Event('focus'));});
+    await visible(f.page.getByRole('alert',{name:'Permissão de notificações'}));
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
+  });
+  await test('Avisos: dispensar o pedido mantém opção de aceitar sem anunciar sucesso', {push:'prompt',permissionChoice:'default'}, async f => {
+    await f.page.getByRole('button',{name:'Aceitar notificações'}).click();
+    await visible(f.page.getByRole('button',{name:'Aceitar notificações'}));
+    assert.equal(await f.page.getByText('Notificações e aviso sonoro ativados neste dispositivo.',{exact:true}).count(),0);
+  });
+  await test('Navegação nova: rodapé profissional, menu com Escape e sem rolagem lateral', {width:390,push:'prompt',tenant:{booking_type:'appointment'}}, async f => {
+    const nav=f.page.getByRole('navigation',{name:'Acessos rápidos do painel'});
+    await nav.getByRole('button',{name:'Financeiro',exact:true}).click();await visible(f.page.getByRole('heading',{name:'Resumo financeiro'}));
+    await nav.getByRole('button',{name:'Agenda',exact:true}).click();await noOverflow(f);
+    await nav.getByRole('button',{name:'Mais',exact:true}).click();await visible(f.page.getByRole('button',{name:'Fechar menu de navegação'}));
+    await f.page.keyboard.press('Shift+Tab');assert.equal(await f.page.evaluate(()=>Boolean(document.activeElement.closest('#professional-admin-menu'))),true);
+    await f.page.keyboard.press('Tab');assert.equal(await f.page.getByRole('button',{name:'Fechar menu de navegação'}).evaluate(el=>el===document.activeElement),true);
+    await f.page.keyboard.press('Escape');assert.equal(await f.page.locator('#professional-admin-menu').getAttribute('inert'),'');
+    assert.equal(await nav.getByRole('button',{name:'Mais',exact:true}).evaluate(el=>el===document.activeElement),true);
+    await nav.getByRole('button',{name:'Hoje',exact:true}).click();await noOverflow(f);
+    await f.page.evaluate(()=>document.fonts.ready);await f.page.screenshot({path:fileURLToPath(new URL('professional-mobile-final.png',output)),animations:'disabled'});
+    await f.page.getByRole('button',{name:'Aceitar notificações'}).click();await f.page.locator('.notification-permission-card').waitFor({state:'detached'});
+    await f.page.screenshot({path:fileURLToPath(new URL('professional-mobile-accepted.png',output)),animations:'disabled'});
+  });
+  await test('Navegação nova: rodapé master chega a clientes, financeiro e ajustes', {master:true,width:390}, async f => {
+    const nav=f.page.getByRole('navigation',{name:'Acessos rápidos da plataforma'});
+    await nav.getByRole('button',{name:'Financeiro',exact:true}).click();await visible(f.page.getByRole('heading',{name:'Controle Financeiro SaaS'}));
+    await nav.getByRole('button',{name:'Ajustes',exact:true}).click();await visible(f.page.getByRole('heading',{name:'Configurações Globais'}));
+    await nav.getByRole('button',{name:'Clientes',exact:true}).click();await noOverflow(f);
+    await f.page.evaluate(()=>document.fonts.ready);await f.page.screenshot({path:fileURLToPath(new URL('master-mobile-final.png',output)),animations:'disabled'});
+  });
+  await test('Responsivo novo: celular de 320px mantém atalhos e conteúdo utilizáveis', {width:320,push:'prompt'}, async f => {
+    await noOverflow(f);const nav=f.page.getByRole('navigation',{name:'Acessos rápidos do painel'});
+    await nav.getByRole('button',{name:'Financeiro',exact:true}).click();await visible(f.page.getByRole('heading',{name:'Resumo financeiro'}));await noOverflow(f);
+    await nav.getByRole('button',{name:'Mais',exact:true}).click();await visible(f.page.getByRole('button',{name:'Fechar menu de navegação'}));
+    await f.page.getByRole('button',{name:'Fechar menu de navegação'}).click();await noOverflow(f);
+  });
+  await test('Responsivo novo: master em 1024px mantém navegação desktop acessível', {master:true,width:1024}, async f => {
+    await visible(f.page.locator('#master-admin-menu').getByRole('button',{name:'SaaS Financeiro'}));
+    await f.page.locator('#master-admin-menu').getByRole('button',{name:'SaaS Financeiro'}).click();await noOverflow(f);
+  });
+  await test('Visual novo: painel profissional desktop com ações e fonte Poppins', {push:'enabled',tenant:{name:'Studio Bella',booking_type:'appointment',primary_color:'#e979b9'},tables:{queue_items:[row('one','waiting',{name:'Mariana Costa',appointment_time:now}),row('two','pending',{name:'Camila Santos',appointment_time:now})]}}, async f => {
+    assert.match(await f.page.locator('.topbar-info h1').evaluate(el=>getComputedStyle(el).fontFamily),/Poppins/);
+    await noOverflow(f);await f.page.evaluate(()=>document.fonts.ready);await f.page.screenshot({path:fileURLToPath(new URL('professional-desktop-final.png',output)),animations:'disabled'});
+  });
 } finally {
   await browser.close();
   const summary = { passed: results.filter(r => r.status === 'passed').length, failed: results.filter(r => r.status === 'failed').length, total: results.length };
   await writeFile(new URL('browser-results.json', output), JSON.stringify({ summary, results }, null, 2));
   console.log(JSON.stringify(summary));
+  if(summary.failed)process.exitCode=1;
 }

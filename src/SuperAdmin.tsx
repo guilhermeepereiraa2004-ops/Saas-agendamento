@@ -8,6 +8,7 @@ import './SuperAdminRedesign.css';
 import { authorizationHeaders } from './lib/access';
 import { TENANT_FIELDS } from './lib/tenantData';
 import { validBilling } from './lib/validation';
+import { useAdminDrawer } from './lib/useAdminDrawer';
 
 interface TenantDraft {
   name: string;
@@ -39,6 +40,7 @@ export default function SuperAdmin() {
   const [pixKey, setPixKey] = useState('');
   const [pixName, setPixName] = useState('');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const compact = useAdminDrawer(isMobileMenuOpen, setIsMobileMenuOpen, 'master-admin-menu');
   const { showToast } = useToasts();
   
   // Form state
@@ -358,9 +360,10 @@ export default function SuperAdmin() {
   };
 
   return (
-    <div className={`admin-layout fade-in ${isMobileMenuOpen ? 'mobile-menu-open' : ''}`}>
+    <div className={`admin-layout master-admin fade-in ${isMobileMenuOpen ? 'mobile-menu-open' : ''}`}>
       {/* Sidebar Redesign */}
-      <aside className={`admin-sidebar ${isMobileMenuOpen ? 'open' : ''}`}>
+      <aside id="master-admin-menu" className={`admin-sidebar ${isMobileMenuOpen ? 'open' : ''}`} aria-hidden={compact && !isMobileMenuOpen ? true : undefined} inert={compact && !isMobileMenuOpen ? true : undefined}>
+        <button type="button" className="admin-drawer-close" onClick={() => setIsMobileMenuOpen(false)} aria-label="Fechar menu de navegação"><span>Menu da plataforma</span><span aria-hidden="true">×</span></button>
         <div className="sidebar-brand">
           <div className="sidebar-logo">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -375,7 +378,7 @@ export default function SuperAdmin() {
           </div>
         </div>
 
-        <nav className="sidebar-nav">
+        <nav className="sidebar-nav" aria-label="Navegação da plataforma">
           <button 
             className={`nav-item ${activeTab === 'tenants' ? 'active' : ''}`}
             onClick={() => { setActiveTab('tenants'); setShowForm(false); setIsMobileMenuOpen(false); }}
@@ -413,13 +416,20 @@ export default function SuperAdmin() {
           </div>
         </div>
       </aside>
-      {isMobileMenuOpen && <div className="mobile-backdrop" onClick={() => setIsMobileMenuOpen(false)} />}
+      {isMobileMenuOpen && <button type="button" className="mobile-backdrop" onClick={() => setIsMobileMenuOpen(false)} aria-label="Fechar menu" />}
+      <nav className="admin-bottom-nav master-bottom-nav" aria-label="Acessos rápidos da plataforma">
+        {([
+          { id: 'tenants', label: 'Clientes', path: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.87' },
+          { id: 'financial', label: 'Financeiro', path: 'M12 2v20m5-16H9a4 4 0 0 0 0 8h6a4 4 0 0 1 0 8H5' },
+          { id: 'settings', label: 'Ajustes', path: 'M4 7h16M4 17h16M8 3v8M16 13v8' },
+        ] as const).map(item => <button type="button" key={item.id} aria-current={activeTab === item.id ? 'page' : undefined} onClick={() => { setActiveTab(item.id); setShowForm(false); setIsMobileMenuOpen(false); document.querySelector('.admin-content')?.scrollTo({ top: 0 }); }}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d={item.path}/></svg><span>{item.label}</span></button>)}
+      </nav>
 
       {/* Main Content Area */}
       <main className="admin-content">
         <header className="content-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <button className="mobile-toggle" onClick={() => setIsMobileMenuOpen(true)}>
+            <button className="mobile-toggle" onClick={() => setIsMobileMenuOpen(true)} aria-label="Abrir menu" aria-expanded={isMobileMenuOpen} aria-controls="master-admin-menu">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
             </button>
             <div>
