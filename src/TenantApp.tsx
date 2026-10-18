@@ -462,13 +462,13 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
     const checkNotifs = async () => {
       const current = ++revision;
       const status = await getNotificationStatus();
-      if (live && current === revision) { setNotificationStatus(status); if (status === 'enabled') setNotificationError(''); }
+      if (live && current === revision) { setNotificationStatus(status); if (status === 'enabled' || status === 'blocked') setNotificationError(''); }
     };
     void checkNotifs();
     const handlePushState = (event: Event) => {
       revision++;
       const detail = (event as CustomEvent<{ status?: NotificationStatus; enabled?: boolean }>).detail;
-      if (detail?.status) { setNotificationStatus(detail.status); if (detail.status === 'enabled') setNotificationError(''); }
+      if (detail?.status) { setNotificationStatus(detail.status); if (detail.status === 'enabled' || detail.status === 'blocked') setNotificationError(''); }
       else void checkNotifs();
     };
     const onVisible = () => { if (document.visibilityState === 'visible') void checkNotifs(); };

@@ -683,6 +683,14 @@ try {
     assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
     assert.equal(await f.page.evaluate(()=>window.__pushHarness.optInCalls),1);
   });
+  await test('Avisos: bloqueio informado depois do prazo substitui o erro antigo pela orientação correta', {push:'prompt',permissionChoice:'hang'}, async f => {
+    await f.page.getByRole('button',{name:'Aceitar notificações'}).click();await f.page.clock.runFor(31000);
+    await visible(f.page.getByRole('button',{name:'Tentar novamente'}));
+    await f.page.evaluate(()=>window.__pushHarness.finishPermission('blocked'));
+    await visible(f.page.getByRole('alert',{name:'Permissão de notificações'}));
+    assert.doesNotMatch(await f.page.locator('.notification-permission-card').innerText(),/navegador não respondeu/);
+    assert.equal(await f.page.getByRole('button',{name:'Tentar novamente'}).count(),0);
+  });
   await test('Avisos: permissão nativa já concedida não recebe um novo pedido se o SDK ainda está desatualizado', {push:'prompt'}, async f => {
     await f.page.evaluate(()=>window.__pushHarness.setNativePermission('granted'));
     await f.page.getByRole('button',{name:'Aceitar notificações'}).click();await f.page.locator('.notification-permission-card').waitFor({state:'detached'});
