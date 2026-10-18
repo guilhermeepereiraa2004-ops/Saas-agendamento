@@ -92,6 +92,8 @@ O pedido de notificações parte do botão **Aceitar notificações**. Entrar no
 
 Se a permissão estiver bloqueada, o painel mostra como liberá-la nas configurações do site. Navegadores sem suporte recebem uma orientação específica. A identificação do profissional e a sincronização da inscrição continuam no servidor, usando a sessão autenticada. Consulte a [referência oficial do OneSignal Web SDK](https://documentation.onesignal.com/docs/en/web-sdk-reference).
 
+Tentativas têm prazo por etapa: 10 segundos para o SDK ficar pronto, 30 para a resposta de permissão e 15 para a inscrição (com até 12 segundos aguardando ID e token). Em falhas, o botão deixa o estado de espera e o motivo permanece no cartão, mesmo depois de o aviso temporário sumir. Erros de domínio no localhost orientam a usar um app OneSignal de testes com URL e porta correspondentes; a configuração de produção é preservada. Uma tentativa expirada não abre um pedido nativo quando o SDK chega atrasado. Pedidos nativos ainda pendentes são reutilizados, e a prontidão do SDK é preservada durante hot reload no desenvolvimento.
+
 No celular, o painel profissional oferece atalhos fixos para Hoje, Agenda ou Serviços, Financeiro e Mais. O master oferece Clientes, Financeiro e Ajustes. Os menus adicionais permitem fechar com Escape, mantêm o foco no menu aberto e restauram o foco ao fechar. Os dois painéis usam Poppins e mantêm áreas de toque com pelo menos 44 pixels nas ações principais.
 
 ## Aplicativos do cliente e profissional

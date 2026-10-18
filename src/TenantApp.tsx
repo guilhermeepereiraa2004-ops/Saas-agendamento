@@ -392,6 +392,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
   const notifsEnabled = notificationStatus === 'enabled';
   const notificationRequestInFlight = useRef(false);
   const [notifsEnabling, setNotifsEnabling] = useState(false);
+  const [notificationError, setNotificationError] = useState('');
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(max-width: 980px)');
@@ -461,13 +462,13 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
     const checkNotifs = async () => {
       const current = ++revision;
       const status = await getNotificationStatus();
-      if (live && current === revision) setNotificationStatus(status);
+      if (live && current === revision) { setNotificationStatus(status); if (status === 'enabled') setNotificationError(''); }
     };
     void checkNotifs();
     const handlePushState = (event: Event) => {
       revision++;
       const detail = (event as CustomEvent<{ status?: NotificationStatus; enabled?: boolean }>).detail;
-      if (detail?.status) setNotificationStatus(detail.status);
+      if (detail?.status) { setNotificationStatus(detail.status); if (detail.status === 'enabled') setNotificationError(''); }
       else void checkNotifs();
     };
     const onVisible = () => { if (document.visibilityState === 'visible') void checkNotifs(); };
@@ -487,20 +488,15 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
     if (notifsEnabled) return getOneSignalId();
     notificationRequestInFlight.current = true;
     setNotifsEnabling(true);
+    setNotificationError('');
 
     try {
-      const pushId = await requestNotificationPermission();
+      const result = await requestNotificationPermission();
+      const pushId = result.id;
       if (!pushId) {
-        setNotificationStatus(await getNotificationStatus());
-        const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent);
-        const isStandalone = window.matchMedia('(display-mode: standalone)').matches
-          || Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
-        const message = typeof Notification !== 'undefined' && Notification.permission === 'denied'
-          ? 'As notificações estão bloqueadas. Libere-as nas configurações do navegador e tente novamente.'
-          : isIos && !isStandalone
-            ? 'No iPhone, adicione o Sua Vez à Tela de Início, abra por esse ícone e tente novamente.'
-            : 'Não foi possível ativar as notificações neste navegador.';
-        showToast(message, 'warning');
+        setNotificationStatus(result.status);
+        setNotificationError(result.message || 'Não foi possível ativar os avisos. Tente novamente.');
+        showToast(result.message || 'Não foi possível ativar os avisos. Tente novamente.', 'warning');
         return null;
       }
 
@@ -523,6 +519,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
       return pushId;
     } catch {
       setNotificationStatus('unavailable');
+      setNotificationError('Não foi possível ativar os avisos. Confira sua conexão e tente novamente.');
       showToast('Não foi possível ativar os avisos. Confira sua conexão e tente novamente.', 'warning');
       return null;
     } finally {
@@ -1909,7 +1906,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
              )}
 
             <div className="admin-content-scroll">
-              <NotificationPermissionCard status={notificationStatus} busy={notifsEnabling} audience="professional" onAccept={() => void enableNotifications()} />
+              <NotificationPermissionCard status={notificationStatus} busy={notifsEnabling} error={notificationError} audience="professional" onAccept={() => void enableNotifications()} />
               <InstallAppCard tenant={tenant} audience="professional" />
 
               {activeTab === 'financial' ? (
@@ -2882,7 +2879,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
           </section>
 
           {audience !== 'professional' && <InstallAppCard tenant={tenant} audience="customer" />}
-          {myItemsInQueue.length > 0 && <NotificationPermissionCard status={notificationStatus} busy={notifsEnabling} audience="customer" onAccept={() => void enableNotifications()} />}
+          {myItemsInQueue.length > 0 && <NotificationPermissionCard status={notificationStatus} busy={notifsEnabling} error={notificationError} audience="customer" onAccept={() => void enableNotifications()} />}
           {/* Client Content */}
           <div className="status-summary-container customer-status-grid fade-in">
             <div className="status-summary-card serving">

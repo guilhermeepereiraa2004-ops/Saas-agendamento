@@ -2,6 +2,7 @@ import { customerTokens } from './customerTokens';
 import { playNotificationSound, unlockNotificationSound } from './notificationSound';
 import { authorizationHeaders } from './access';
 import { resolveNotificationStatus, type NotificationStatus } from './notificationStatus';
+import { classifyNotificationError, notificationFailure, type NotificationFailureReason, type NotificationPermissionResult } from './notificationRequest';
 
 export type PushEventName =
   | 'client_joined'
@@ -66,12 +67,31 @@ interface OneSignalClient {
   };
 }
 
+interface OneSignalRuntime {
+  client: OneSignalClient | null;
+  failure: Extract<NotificationPermissionResult, { id: null }> | null;
+  observers: Set<() => void>;
+  permissionRequest: Promise<void> | null;
+}
+// Keep SDK readiness across development hot reloads, like the initialization guard.
+const runtime = window._oneSignalRuntime ??= { client: null, failure: null, observers: new Set<() => void>(), permissionRequest: null } as OneSignalRuntime;
+const localEnvironment = () => ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname);
+const failure = (reason: NotificationFailureReason) => notificationFailure(reason, localEnvironment());
+const publishSdkReady = () => { for (const observer of [...runtime.observers]) observer(); };
+
+function observeSdk(observer: () => void) {
+  if (runtime.client || runtime.failure) { observer(); return () => {}; }
+  runtime.observers.add(observer);
+  return () => { runtime.observers.delete(observer); };
+}
+
 declare global {
   interface Window {
     OneSignalDeferred: Array<(oneSignal: OneSignalClient) => void | Promise<void>>;
     OneSignal: OneSignalClient;
     _oneSignalInitialized?: boolean;
     _oneSignalListenersRegistered?: boolean;
+    _oneSignalRuntime?: OneSignalRuntime;
   }
 }
 
@@ -111,16 +131,18 @@ export function getNotificationStatus(): Promise<NotificationStatus> {
   return new Promise(resolve => {
     const fallback: NotificationStatus = typeof Notification === 'undefined' ? 'unsupported'
       : Notification.permission === 'denied' ? 'blocked' : 'unavailable';
-    const timeout = window.setTimeout(() => resolve(fallback), 3500);
-    window.OneSignalDeferred = window.OneSignalDeferred || [];
-    window.OneSignalDeferred.push(oneSignal => {
+    let unsubscribe = () => {};
+    const timeout = window.setTimeout(() => { unsubscribe(); resolve(fallback); }, 3500);
+    unsubscribe = observeSdk(() => {
       window.clearTimeout(timeout);
-      try { resolve(readNotificationStatus(oneSignal)); } catch { resolve(fallback); }
+      unsubscribe();
+      try { resolve(runtime.client ? readNotificationStatus(runtime.client) : fallback); } catch { resolve(fallback); }
     });
   });
 }
 
-function waitForSubscriptionId(oneSignal: OneSignalClient, timeoutMs = 12000): Promise<string | null> {
+function waitForSubscriptionId(oneSignal: OneSignalClient, timeoutMs = 12000, signal?: AbortSignal): Promise<string | null> {
+  if (signal?.aborted) return Promise.resolve(null);
   const ready = () => readNotificationStatus(oneSignal) === 'enabled';
   const currentId = oneSignal.User.PushSubscription.id;
   if (currentId && ready()) return Promise.resolve(currentId);
@@ -132,14 +154,17 @@ function waitForSubscriptionId(oneSignal: OneSignalClient, timeoutMs = 12000): P
       settled = true;
       window.clearTimeout(timeout);
       oneSignal.User.PushSubscription.removeEventListener('change', onChange);
+      signal?.removeEventListener('abort', onAbort);
       resolve(id);
     };
     const onChange = (event: SubscriptionChangeEvent) => {
       const id = event.current?.id || oneSignal.User.PushSubscription.id;
       if (id && ready()) finish(id);
     };
+    const onAbort = () => finish(null);
     const timeout = window.setTimeout(() => finish(ready() ? oneSignal.User.PushSubscription.id : null), timeoutMs);
     oneSignal.User.PushSubscription.addEventListener('change', onChange);
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 
@@ -147,11 +172,14 @@ export function initializeOneSignal() {
   const appId = import.meta.env.VITE_ONESIGNAL_APP_ID?.trim();
 
   if (!appId || appId === 'seu_app_id_do_onesignal_aqui') {
+    runtime.failure = failure('unconfigured');
+    publishSdkReady();
     console.warn('OneSignal: VITE_ONESIGNAL_APP_ID não configurado.');
     return;
   }
 
   if (window._oneSignalInitialized) return;
+  runtime.failure = null;
   window._oneSignalInitialized = true;
   const unlockSound = () => void unlockNotificationSound();
   window.addEventListener('pointerdown', unlockSound, { once: true, passive: true });
@@ -172,6 +200,9 @@ export function initializeOneSignal() {
         notifyButton: { enable: false },
         promptOptions: { slidedown: { prompts: [{ type: 'push', autoPrompt: false }] } },
       });
+      runtime.client = oneSignal;
+      runtime.failure = null;
+      publishSdkReady();
 
       if (!window._oneSignalListenersRegistered) {
         window._oneSignalListenersRegistered = true;
@@ -201,62 +232,88 @@ export function initializeOneSignal() {
       publishPushState(oneSignal);
       console.info('OneSignal: inicializado.');
     } catch (error) {
+      runtime.client = null;
+      runtime.failure = failure(classifyNotificationError(error, 'initialization'));
+      publishSdkReady();
       window._oneSignalInitialized = false;
       console.error('OneSignal: falha na inicialização.', error);
     }
   });
 }
 
-export function requestNotificationPermission(): Promise<string | null> {
+export function requestNotificationPermission(): Promise<NotificationPermissionResult> {
   void unlockNotificationSound();
-
+  if (!window.isSecureContext) return Promise.resolve(failure('insecure-origin'));
   return new Promise(resolve => {
-    const sdkTimeout = window.setTimeout(() => resolve(null), 15000);
-    window.OneSignalDeferred = window.OneSignalDeferred || [];
-    window.OneSignalDeferred.push(async oneSignal => {
+    let settled = false;
+    let timer: number;
+    let unsubscribe = () => {};
+    const controller = new AbortController();
+    const finish = (result: NotificationPermissionResult) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      unsubscribe();
+      controller.abort();
+      resolve(result);
+    };
+    const deadline = (reason: NotificationFailureReason, ms: number) => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => finish(failure(reason)), ms);
+    };
+    const request = async (oneSignal: OneSignalClient) => {
       try {
         // The permission request must run before identity/network work in the click handler.
-        window.clearTimeout(sdkTimeout);
         if (typeof Notification !== 'undefined' && Notification.permission === 'denied') {
           publishPushState(oneSignal);
-          window.clearTimeout(sdkTimeout);
-          resolve(null);
+          finish(failure('blocked'));
           return;
         }
         if (!oneSignal.Notifications.isPushSupported()) {
           console.warn('OneSignal: este navegador não oferece suporte a push web.');
           publishPushState(oneSignal);
-          window.clearTimeout(sdkTimeout);
-          resolve(null);
+          finish(failure('unsupported'));
           return;
         }
 
-        if (!oneSignal.Notifications.permission || (typeof Notification !== 'undefined' && Notification.permission === 'default')) {
+        const permitted = () => typeof Notification === 'undefined' ? oneSignal.Notifications.permission : Notification.permission === 'granted';
+        if (!permitted()) {
           // O botão da aplicação já funciona como pre-prompt. A solicitação nativa
           // precisa acontecer diretamente dentro do gesto do usuário, sobretudo no mobile.
-          await oneSignal.Notifications.requestPermission();
+          deadline('permission-timeout', 30000);
+          runtime.permissionRequest ??= oneSignal.Notifications.requestPermission().finally(() => { runtime.permissionRequest = null; });
+          await runtime.permissionRequest;
+          if (settled) return;
         }
 
-        if (!oneSignal.Notifications.permission) {
+        if (!permitted()) {
           publishPushState(oneSignal);
-          window.clearTimeout(sdkTimeout);
-          resolve(null);
+          finish(failure(typeof Notification !== 'undefined' && Notification.permission === 'denied' ? 'blocked' : 'dismissed'));
           return;
         }
 
+        deadline('subscription-timeout', 15000);
         if (!oneSignal.User.PushSubscription.optedIn) {
           await oneSignal.User.PushSubscription.optIn();
+          if (settled) return;
         }
 
-        const id = await waitForSubscriptionId(oneSignal);
+        const id = await waitForSubscriptionId(oneSignal, 12000, controller.signal);
+        if (settled) return;
         publishPushState(oneSignal);
-        window.clearTimeout(sdkTimeout);
-        resolve(oneSignal.User.PushSubscription.optedIn && oneSignal.User.PushSubscription.token ? id : null);
+        finish(id && readNotificationStatus(oneSignal) === 'enabled' ? { id, status: 'enabled' } : failure('subscription-timeout'));
       } catch (error) {
-        window.clearTimeout(sdkTimeout);
+        if (settled) return;
         console.error('OneSignal: erro ao solicitar notificações.', error);
-        resolve(null);
+        finish(failure(classifyNotificationError(error)));
       }
+    };
+    deadline('sdk-timeout', 10000);
+    unsubscribe = observeSdk(() => {
+      if (settled) return;
+      unsubscribe();
+      if (runtime.failure) { finish(runtime.failure); return; }
+      if (runtime.client) void request(runtime.client);
     });
   });
 }

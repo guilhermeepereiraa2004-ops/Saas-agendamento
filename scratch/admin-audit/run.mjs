@@ -31,7 +31,7 @@ async function wait(check, message = 'State did not update', ms = 7500) {
 }
 async function visible(locator) { await locator.waitFor({ state: 'visible' }); }
 const field = (page, text) => page.locator('.form-group').filter({ has: page.locator('label').filter({ hasText: new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }) }).first().locator('input, select').first();
-async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, forged = false, master = false, delay = 0, push = 'unsupported', permissionChoice = 'granted', path, userAgent, standalone = false } = {}) {
+async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, forged = false, master = false, delay = 0, push = 'unsupported', permissionChoice = 'granted', path, userAgent, standalone = false, origin = 'https://admin-audit.test', ownedItems = [] } = {}) {
   const db = {
     tenants: [structuredClone({ ...base, ...tenant })], queue_items: [], tenant_tasks: [], tenant_products: [], tenant_expenses: [], financial_records: [],
     platform_settings: [{ id: 'settings', pix_key: 'fixture-key', pix_name: 'QA beneficiary' }], ...structuredClone(tables),
@@ -44,23 +44,27 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
   });
   const user = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', email: base.login_email, aud: 'authenticated', role: 'authenticated' };
   const session = { access_token: 'qa-verified-token', refresh_token: 'qa-refresh-token', expires_at: 9999999999, expires_in: 3600, token_type: 'bearer', user };
-  await context.addInitScript(({ auth, forged, master, session, push, permissionChoice }) => {
+  await context.addInitScript(({ auth, forged, master, session, push, permissionChoice, ownedItems, tenantId }) => {
     if (forged) localStorage.setItem(master ? 'admin_auth' : 'suavez_auth_qa', 'true');
     if (auth) localStorage.setItem('sb-tfquhfhmmnbwntmkfkdo-auth-token', JSON.stringify(session));
+    if(ownedItems.length) localStorage.setItem(`suavez_customer_ids_${tenantId}`,JSON.stringify(ownedItems));
     // Isolated SDK and browser permission: never requests native permission or contacts devices.
     const listeners = { permissionChange: new Set(), change: new Set() };
     let status = localStorage.getItem('qa_push_status') || push;
     let nativePermission = status === 'enabled' || status === 'incomplete' ? 'granted' : status === 'blocked' ? 'denied' : 'default';
     Object.defineProperty(Notification, 'permission', { configurable: true, get: () => nativePermission });
-    const harness = { requestCalls: 0, loginCalls: 0, initOptions: null };
+    const harness = { requestCalls: 0, loginCalls: 0, optInCalls: 0, initOptions: null };
+    let finishPermission;const queued=[];
     const sdk = {
-      init: async options => { harness.initOptions = options; },
+      init: async options => { harness.initOptions = options; if(permissionChoice==='origin-error') throw new Error('Can only be used on: https://production.example.invalid'); if(permissionChoice==='init-error')throw new Error('Fixture initialization failed'); },
       login: async () => { harness.loginCalls++; }, logout: async () => {}, Slidedown: { promptPush: async () => {} },
       Notifications: {
         permission: nativePermission === 'granted', isPushSupported: () => push !== 'unsupported',
         requestPermission: async () => {
           harness.requestCalls++;
           if (permissionChoice === 'error') throw new Error('Fixture SDK unavailable');
+          if (permissionChoice === 'network-error') throw new Error('Failed to fetch');
+          if (permissionChoice === 'hang') return new Promise(resolve=>{finishPermission=value=>{setStatus(value);resolve();};});
           setStatus(permissionChoice === 'granted' ? 'enabled' : permissionChoice === 'denied' ? 'blocked' : 'prompt');
         },
         addEventListener: (event, callback) => listeners[event]?.add(callback),
@@ -68,21 +72,21 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
       User: { PushSubscription: { id: null, token: null, optedIn: false,
         addEventListener: (_event, callback) => listeners.change.add(callback),
         removeEventListener: (_event, callback) => listeners.change.delete(callback),
-        optIn: async () => setStatus('enabled'),
+        optIn: async () => {harness.optInCalls++;if(permissionChoice==='opt-in-hang')return new Promise(()=>{});setStatus('enabled');},
       } },
     };
     function setStatus(value) {
       status = value; localStorage.setItem('qa_push_status',value);
-      nativePermission = value === 'enabled' || value === 'incomplete' ? 'granted' : value === 'blocked' ? 'denied' : 'default';
+      nativePermission = ['enabled','incomplete','permission-only'].includes(value) ? 'granted' : value === 'blocked' ? 'denied' : 'default';
       sdk.Notifications.permission = nativePermission === 'granted';
       Object.assign(sdk.User.PushSubscription, { id: value === 'enabled' || value === 'incomplete' ? 'qa-subscription' : null, token: value === 'enabled' ? 'qa-token' : null, optedIn: value === 'enabled' || value === 'incomplete' });
       for(const callback of listeners.permissionChange) callback(sdk.Notifications.permission);
       for(const callback of listeners.change) callback({ current: {id:sdk.User.PushSubscription.id} });
     }
     setStatus(status);
-    window.__pushHarness = Object.assign(harness,{setStatus,setNativePermission: value => { nativePermission=value; }});
-    window.OneSignalDeferred = { push: fn => Promise.resolve().then(() => fn(sdk)).catch(() => {}) };
-  }, { auth, forged, master, session, push, permissionChoice });
+    window.__pushHarness = Object.assign(harness,{setStatus,setNativePermission: value => { nativePermission=value; },setChoice:value=>{permissionChoice=value;},finishPermission:value=>finishPermission?.(value),flushSDK:async()=>{for(const fn of queued.splice(0)) await fn(sdk);}});
+    window.OneSignalDeferred = { push: fn => push==='sdk-delayed' ? queued.push(fn) : Promise.resolve().then(() => fn(sdk)).catch(() => {}) };
+  }, { auth, forged, master, session, push, permissionChoice, ownedItems, tenantId });
 
   await context.route('**/*', async route => {
     const request = route.request(); const url = new URL(request.url()); const method = request.method();
@@ -166,7 +170,7 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
       const audience = url.searchParams.get('audience'); const segment = audience === 'professional' ? 'profissional' : 'cliente';
       return send({id:`/apps/${tenantId}/${audience}`,name:'Barbearia QA',start_url:`/qa/${segment}/`,scope:`/qa/${segment}/`,display:'standalone',icons:[{src:'/icons/suavez-v2-192.png',sizes:'192x192',type:'image/png'},{src:'/icons/suavez-v2-512.png',sizes:'512x512',type:'image/png'}]});
     }
-    if (url.hostname === 'admin-audit.test') {
+    if (url.origin === origin) {
       const asset = url.pathname.startsWith('/assets/') || url.pathname.startsWith('/icons/') || url.pathname === '/pwa-bootstrap.js' ? url.pathname.slice(1) : 'index.html';
       const body = await readFile(new URL(`../../dist/${asset}`, import.meta.url));
       return route.fulfill({ status: 200, contentType: asset.endsWith('.js') ? 'application/javascript' : asset.endsWith('.css') ? 'text/css' : asset.endsWith('.png') ? 'image/png' : 'text/html', body });
@@ -180,7 +184,7 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
   await page.clock.install({ time: new Date(now) });
   page.on('pageerror', error => exceptions.push(error.message));
   page.on('dialog', dialog => dialog.accept());
-  await page.goto(`https://admin-audit.test${path || `/${master ? 'admin' : 'qa'}`}`);
+  await page.goto(`${origin}${path || `/${master ? 'admin' : 'qa'}`}`);
   if (!path && !master) await page.waitForURL(/\/qa\/(cliente|profissional)\/$/);
   await visible(page.locator(path?.includes('/cliente') ? '.customer-app' : !auth && path?.includes('/profissional') ? '.tenant-login' : auth ? master ? '.admin-layout' : '.professional-admin' : master ? '.master-login' : '.customer-app').first());
   const nav = async name => {
@@ -657,8 +661,65 @@ try {
   });
   await test('Avisos: SDK com falha não anuncia ativação e permite nova tentativa', {push:'prompt',permissionChoice:'error'}, async f => {
     await f.page.getByRole('button',{name:'Aceitar notificações'}).click();
-    await visible(f.page.getByRole('button',{name:'Aceitar notificações'}));
+    await visible(f.page.getByRole('button',{name:'Tentar novamente'}));
     assert.equal(await f.page.getByText('Notificações e aviso sonoro ativados neste dispositivo.',{exact:true}).count(),0);
+  });
+  await test('Avisos: pedido de permissão sem resposta libera botão com explicação e aceita resposta tardia', {push:'prompt',permissionChoice:'hang',width:390}, async f => {
+    await f.page.getByRole('button',{name:'Aceitar notificações'}).click();await visible(f.page.getByRole('button',{name:'Aguardando permissão…'}));
+    await f.page.clock.runFor(31000);await visible(f.page.getByRole('button',{name:'Tentar novamente'}));
+    await visible(f.page.locator('.notification-permission-card').getByRole('alert'));
+    assert.match(await f.page.locator('.notification-permission-card').innerText(),/navegador não respondeu ao pedido de permissão/);
+    assert.equal(f.requests.some(r=>r.table==='tenants'&&r.method==='PATCH'),false);
+    await f.page.screenshot({path:fileURLToPath(new URL('push-permission-timeout.png',output)),animations:'disabled'});
+    await f.page.getByRole('button',{name:'Tentar novamente'}).click();
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),1,'não abre um segundo pedido nativo enquanto o anterior está pendente');
+    await f.page.evaluate(()=>window.__pushHarness.finishPermission('enabled'));
+    await f.page.locator('.notification-permission-card').waitFor({state:'detached'});
+  });
+  await test('Avisos: inscrição travada após permitir também tem prazo e mensagem específica', {push:'permission-only',permissionChoice:'opt-in-hang'}, async f => {
+    await f.page.getByRole('button',{name:'Aceitar notificações'}).click();await f.page.clock.runFor(16000);
+    await visible(f.page.getByRole('button',{name:'Tentar novamente'}));
+    assert.match(await f.page.locator('.notification-permission-card').innerText(),/permissão foi aceita, mas a inscrição/);
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.optInCalls),1);
+  });
+  await test('Avisos: permissão nativa já concedida não recebe um novo pedido se o SDK ainda está desatualizado', {push:'prompt'}, async f => {
+    await f.page.evaluate(()=>window.__pushHarness.setNativePermission('granted'));
+    await f.page.getByRole('button',{name:'Aceitar notificações'}).click();await f.page.locator('.notification-permission-card').waitFor({state:'detached'});
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.optInCalls),1);
+  });
+  await test('Avisos: falha de inicialização é explicada sem chamar a permissão', {push:'prompt',permissionChoice:'init-error'}, async f => {
+    await f.page.clock.runFor(4000);await f.page.getByRole('button',{name:'Tentar novamente'}).click();
+    assert.match(await f.page.locator('.notification-permission-card').innerText(),/serviço de avisos não conseguiu iniciar/);
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
+  });
+  await test('Avisos: SDK atrasado não dispara pedido nativo depois de expirar a tentativa', {push:'sdk-delayed'}, async f => {
+    await f.page.clock.runFor(4000);await f.page.getByRole('button',{name:'Tentar novamente'}).click();
+    await f.page.clock.runFor(11000);await visible(f.page.getByRole('button',{name:'Tentar novamente'}));
+    assert.match(await f.page.locator('.notification-permission-card').innerText(),/serviço de avisos não respondeu/);
+    await f.page.evaluate(()=>window.__pushHarness.flushSDK());
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
+    await f.page.getByRole('button',{name:'Aceitar notificações'}).click();await f.page.locator('.notification-permission-card').waitFor({state:'detached'});
+  });
+  await test('Avisos: erro de domínio no localhost explica app de testes sem abrir permissão', {push:'prompt',permissionChoice:'origin-error',origin:'http://localhost:5173',width:390}, async f => {
+    await f.page.clock.runFor(4000);await f.page.getByRole('button',{name:'Tentar novamente'}).click();
+    await visible(f.page.locator('.notification-permission-card').getByRole('alert'));
+    assert.match(await f.page.locator('.notification-permission-card').innerText(),/mesma URL e porta locais/);
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
+    await noOverflow(f);await f.page.screenshot({path:fileURLToPath(new URL('push-localhost-error.png',output)),animations:'disabled'});
+  });
+  await test('Avisos: falha de rede mantém motivo visível após o toast e recupera na nova tentativa', {push:'prompt',permissionChoice:'network-error'}, async f => {
+    await f.page.getByRole('button',{name:'Aceitar notificações'}).click();await visible(f.page.getByRole('button',{name:'Tentar novamente'}));
+    await f.page.clock.runFor(6000);assert.match(await f.page.locator('.notification-permission-card').innerText(),/conexão com o serviço de avisos falhou/);
+    await f.page.evaluate(()=>window.__pushHarness.setChoice('granted'));await f.page.getByRole('button',{name:'Tentar novamente'}).click();
+    await f.page.locator('.notification-permission-card').waitFor({state:'detached'});
+  });
+  await test('Avisos: cliente recebe explicação e botão disponível após pedido travado', {auth:false,ownedItems:['mine'],tables:{queue_items:[row('mine')]},push:'prompt',permissionChoice:'hang',width:390}, async f => {
+    await f.page.getByRole('button',{name:'Aceitar notificações'}).click();await f.page.clock.runFor(31000);
+    await visible(f.page.getByRole('button',{name:'Tentar novamente'}));
+    assert.match(await f.page.locator('.notification-permission-card').innerText(),/navegador não respondeu/);
+    assert.equal(f.requests.some(r=>r.table==='customer_queue_action'&&r.body.p_action==='subscribe'),false);
   });
   await test('Avisos: aceite sem token não é considerado ativo antes da inscrição completa', {push:'incomplete'}, async f => {
     const button=f.page.getByRole('button',{name:'Aceitar notificações'});await visible(button);await button.click();
