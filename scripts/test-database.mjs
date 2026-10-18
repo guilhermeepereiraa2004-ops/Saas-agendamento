@@ -134,6 +134,20 @@ try {
     await denied('authenticated',owner,'insert into tenant_expenses(tenant_id,description,amount) values($1,$2,$3)',[tenant,'Bypass',50]);
     assert.equal((await db.query('select count(*)::int n from tenant_expenses')).rows[0].n,1);
   });
+  await test('Staff cancellation retains the subscription, leaves no revenue and cannot be completed',async()=>{
+    const q=(await as('anon',null,'select * from join_queue($1,$2,$3,$4,$5)',[tenant,'cut','Cancelamento QA','71999999999','c'.repeat(64)])).rows[0].join_queue;
+    await as('anon',null,"select customer_queue_action($1,$2,'subscribe',$3)",[q.id,'c'.repeat(64),'qa-client-device']);
+    assert.equal((await as('authenticated',other,"update queue_items set status='cancelled' where id=$1 returning id",[q.id])).rows.length,0);
+    await denied('anon',null,"update queue_items set status='cancelled' where id=$1",[q.id]);
+    const before=(await db.query('select count(*)::int n from financial_records')).rows[0].n;
+    await as('authenticated',owner,"update queue_items set status='serving' where id=$1",[q.id]);
+    const cancelled=await as('authenticated',owner,"update queue_items set status='cancelled',is_on_way=false where tenant_id=$1 and id=$2 and status in ('waiting','ready','pending','serving') returning id,push_id",[tenant,q.id]);
+    assert.equal(cancelled.rows[0].push_id,'qa-client-device');
+    assert.equal((await as('anon',null,'select * from get_public_queue($1)',[tenant])).rows.some(row=>row.get_public_queue.id===q.id),false);
+    await denied('authenticated',owner,'select complete_service($1,$2)',[tenant,q.id]);
+    assert.equal((await db.query('select count(*)::int n from financial_records')).rows[0].n,before);
+    assert.equal((await as('authenticated',owner,"update queue_items set status='cancelled' where id=$1 and status in ('waiting','ready','pending','serving') returning id",[q.id])).rows.length,0);
+  });
   await test('Customer proof for push is not callable by public or professional roles', async () => {
     await denied('anon',null,'select verify_customer_queue_access($1,$2,$3)',[queueId,tenant,token]);
     await denied('authenticated',owner,'select get_tenant_account($1)',[tenant]);

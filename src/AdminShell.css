@@ -50,6 +50,23 @@
 .professional-admin .admin-content-scroll { padding: 1.8rem 2rem !important; }
 .professional-admin .admin-kpi-card, .professional-admin .admin-stat-card { min-height: 112px; border-radius: 16px !important; padding: 1.15rem !important; box-shadow: 0 3px 12px #183a2a04 !important; }
 .professional-admin .admin-kpi-card::after { display: none; }
+.professional-admin .admin-cancel-action {
+  width: auto !important;
+  min-width: 76px;
+  min-height: 44px;
+  height: auto !important;
+  padding: .55rem .65rem;
+  opacity: 1;
+  background: #fff3f1 !important;
+  color: #a62d26 !important;
+  border: 1px solid #f0d3ce !important;
+  border-radius: 10px;
+  font-size: .68rem;
+  font-weight: 600;
+}
+.professional-admin .admin-cancel-action:disabled { opacity: .55; cursor: wait; }
+.professional-admin .admin-modal .admin-cancel-confirm { background: #b7372d !important; color: #fff !important; box-shadow: none !important; }
+.professional-admin .admin-modal .admin-cancel-confirm:focus-visible { outline-color: #b7372d; }
 .professional-admin .admin-kpi-icon { width: 42px; height: 42px; border-radius: 12px; background: #eff6f1 !important; color: #39664f !important; }
 .professional-admin .admin-kpi-card .stat-value { font-size: 2rem; letter-spacing: -.06em; }
 .professional-admin .admin-kpi-card .stat-label { font-size: .65rem; letter-spacing: .025em; }

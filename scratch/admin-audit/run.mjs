@@ -148,6 +148,7 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
         if (['select', 'order', 'limit', 'offset'].includes(key)) return true;
         const dot = value.indexOf('.'); const op = value.slice(0, dot); const v = value.slice(dot + 1);
         if (op === 'eq') return String(item[key]) === v;
+        if (op === 'in') return v.slice(1,-1).split(',').includes(String(item[key]));
         if (op === 'gte') return String(item[key]) >= v;
         if (op === 'lt') return String(item[key]) < v;
         return true;
@@ -386,13 +387,50 @@ try {
     assert.ok(f.requests.some(r => r.table === 'push' && r.body.event === 'client_called'));
     assert.deepEqual(f.requests.filter(r=>r.table==='push').map(r=>r.body.event),['client_called'],'Iniciar e concluir não devem enviar avisos ao cliente');
   });
-  await test('Fila: remover exige confirmação e não registra receita', { tables: { queue_items: [row('remove')] } }, async f => {
-    await f.page.getByRole('button', { name: 'Remover Cliente remove do atendimento' }).click();
+  await test('Fila: cancelar exige confirmação, mantém registro e envia aviso sem receita', { tables: { queue_items: [row('remove')] } }, async f => {
+    await f.page.getByRole('button', { name: 'Cancelar atendimento de Cliente remove' }).click();
     const dialog = f.page.getByRole('alertdialog'); await visible(dialog);
     await dialog.getByRole('button', { name: 'Manter cliente', exact: true }).click(); assert.equal(f.db.queue_items.length, 1);
-    await f.page.getByRole('button', { name: 'Remover Cliente remove do atendimento' }).click();
-    await f.page.getByRole('alertdialog').getByRole('button', { name: 'Sim, remover da fila', exact: true }).click();
-    await wait(() => f.db.queue_items.length === 0); assert.equal(f.db.financial_records.length, 0);
+    await f.page.getByRole('button', { name: 'Cancelar atendimento de Cliente remove' }).click();
+    await f.page.getByRole('alertdialog').getByRole('button', { name: 'Sim, cancelar atendimento', exact: true }).click();
+    await wait(() => f.db.queue_items[0].status === 'cancelled'); assert.equal(f.db.financial_records.length, 0);
+    await wait(()=>f.requests.some(r=>r.table==='push'&&r.body.event==='appointment_cancelled'));
+    assert.equal(await f.page.getByRole('button',{name:'Cancelar atendimento de Cliente remove'}).count(),0);
+    assert.equal(f.requests.some(r=>r.table==='queue_items'&&r.method==='DELETE'),false);
+  });
+  for(const status of ['waiting','ready','serving','pending'])await test(`Cancelamento: ${status} permite cancelar pelo mobile, sem duplicar nem criar receita`, {width:390,delay:300,tenant:{booking_type:status==='pending'?'appointment':'queue'},tables:{queue_items:[row('cancel',status)]}}, async f=>{
+    await f.page.getByRole('button',{name:'Cancelar atendimento de Cliente cancel'}).click();
+    const dialog=f.page.getByRole('alertdialog',{name:'Cancelar atendimento?'});await visible(dialog);
+    await f.page.keyboard.press('Tab');assert.equal(await f.page.evaluate(()=>Boolean(document.activeElement.closest('[role=alertdialog]'))),true);
+    if(status==='waiting')await f.page.screenshot({path:fileURLToPath(new URL('cancelar-atendimento-mobile.png',output)),animations:'disabled'});
+    await dialog.getByRole('button',{name:'Sim, cancelar atendimento'}).dispatchEvent('click');
+    await dialog.getByRole('button',{name:/Cancelando|Sim, cancelar/}).dispatchEvent('click');
+    await wait(()=>f.db.queue_items[0].status==='cancelled');await wait(()=>f.requests.some(r=>r.table==='push'));
+    assert.equal(f.requests.filter(r=>r.table==='queue_items'&&r.method==='PATCH').length,1);
+    assert.deepEqual(f.requests.filter(r=>r.table==='push').map(r=>r.body.event),['appointment_cancelled']);
+    assert.equal(f.db.financial_records.length,0);await noOverflow(f);
+  });
+  await test('Cancelamento: erro ao salvar mantém atendimento e não envia notificação', {tables:{queue_items:[row('error-cancel')]}}, async f=>{
+    f.faults.push({table:'queue_items',method:'PATCH',remaining:1});
+    await f.page.getByRole('button',{name:'Cancelar atendimento de Cliente error-cancel'}).click();
+    await f.page.getByRole('button',{name:'Sim, cancelar atendimento'}).click();
+    await visible(f.page.getByText('Não foi possível cancelar o atendimento. Tente novamente.',{exact:true}));
+    assert.equal(f.db.queue_items[0].status,'waiting');assert.equal(f.requests.some(r=>r.table==='push'),false);
+    await visible(f.page.getByRole('alertdialog'));
+  });
+  await test('Cancelamento: atendimento alterado em outro aparelho não recebe segundo aviso', {tables:{queue_items:[row('race-cancel')]}}, async f=>{
+    await f.page.getByRole('button',{name:'Cancelar atendimento de Cliente race-cancel'}).click();
+    f.db.queue_items[0].status='cancelled';
+    await f.page.getByRole('button',{name:'Sim, cancelar atendimento'}).click();
+    await visible(f.page.getByText('Este atendimento já foi alterado em outro aparelho. Atualize a fila.',{exact:true}));
+    assert.equal(f.requests.some(r=>r.table==='push'),false);assert.equal(f.db.financial_records.length,0);
+  });
+  await test('Cancelamento: agenda permite cancelar compromisso confirmado e avisa falha de push', {tenant:{booking_type:'appointment'},tables:{queue_items:[row('scheduled-cancel','waiting',{appointment_time:now})]}}, async f=>{
+    await f.nav('Agenda');await f.page.getByRole('button',{name:'Cancelar atendimento de Cliente scheduled-cancel'}).click();
+    await f.page.getByRole('button',{name:'Sim, cancelar atendimento'}).click();
+    await wait(()=>f.db.queue_items[0].status==='cancelled');
+    await visible(f.page.getByText('Atendimento cancelado, mas não foi possível enviar o aviso ao cliente. Confira se ele aceitou as notificações.',{exact:true}));
+    assert.equal(f.db.financial_records.length,0);assert.equal(f.requests.filter(r=>r.table==='push').length,1);
   });
   await test('Fila: erro ao registrar receita preserva atendimento', { tables: { queue_items: [row('error', 'serving')] } }, async f => {
     f.faults.push({ table: 'complete_service', method: 'POST', remaining: 1 });

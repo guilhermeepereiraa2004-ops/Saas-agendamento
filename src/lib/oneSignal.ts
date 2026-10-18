@@ -7,6 +7,7 @@ import { classifyNotificationError, notificationFailure, type NotificationFailur
 export type PushEventName =
   | 'client_joined'
   | 'client_called'
+  | 'appointment_cancelled'
   | 'client_on_way'
   | 'appointment_approved'
   | 'appointment_rejected';

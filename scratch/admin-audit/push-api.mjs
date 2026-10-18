@@ -42,7 +42,7 @@ await test('Push API: registro não encontrado', async () => { lookupRows = fals
 await test('Push API: evento incompatível com estado não envia', async () => { item.status = 'waiting'; assert.equal((await handler.fetch(request())).status, 202); assert.equal(sent.length, 0); });
 await test('Push API: sem assinatura não envia para cliente', async () => { item.push_id = null; assert.equal((await handler.fetch(request())).status, 202); assert.equal(sent.length, 0); });
 for (const [event, status, appointment, target] of [
-  ['client_called', 'ready', null, 'client'], ['appointment_approved', 'waiting', now(), 'client'], ['appointment_rejected', 'cancelled', now(), 'client'], ['client_joined', 'waiting', null, 'admin'], ['client_on_way', 'ready', null, 'admin'],
+  ['client_called', 'ready', null, 'client'], ['appointment_cancelled', 'cancelled', null, 'client'], ['appointment_approved', 'waiting', now(), 'client'], ['appointment_rejected', 'cancelled', now(), 'client'], ['client_joined', 'waiting', null, 'admin'], ['client_on_way', 'ready', null, 'admin'],
 ]) await test(`Push API: ${event} usa destinatário e conteúdo esperados`, async () => {
   Object.assign(item, { status, appointment_time: appointment, is_on_way: event === 'client_on_way' });
   const response = await handler.fetch(request({ event, tenantId, queueItemId,customerToken:'a'.repeat(64) }));
@@ -53,6 +53,28 @@ for (const [event, status, appointment, target] of [
   assert.equal(sent[0].web_url,destination);assert.equal(sent[0].web_buttons[0].url,destination);assert.ok(sent[0].idempotency_key);
 });
 await test('Push API: chave de idempotência estável para mesma ação', async () => { await handler.fetch(request()); await handler.fetch(request()); assert.equal(sent[0].idempotency_key, sent[1].idempotency_key); });
+await test('Cancelamento push: informa cancelamento de horário e evita duplicar aviso',async()=>{
+  Object.assign(item,{status:'cancelled',appointment_time:now()});
+  const payload={event:'appointment_cancelled',tenantId,queueItemId};
+  await handler.fetch(request(payload));await handler.fetch(request(payload));
+  assert.equal(sent[0].headings.pt,'Agendamento cancelado');assert.match(sent[0].contents.pt,/cancelou seu atendimento/);
+  assert.equal(sent[0].idempotency_key,sent[1].idempotency_key);
+});
+await test('Cancelamento push: não envia antes de salvar o cancelamento nem sem inscrição',async()=>{
+  for(const status of ['waiting','ready','pending','serving','completed']){
+    item.status=status;assert.equal((await handler.fetch(request({event:'appointment_cancelled',tenantId,queueItemId}))).status,202);
+  }
+  item.status='cancelled';item.push_id=null;
+  assert.equal((await handler.fetch(request({event:'appointment_cancelled',tenantId,queueItemId}))).status,202);
+  assert.equal(sent.length,0);
+});
+await test('Cancelamento push: exige profissional autenticado do estabelecimento',async()=>{
+  item.status='cancelled';
+  assert.equal((await handler.fetch(request({event:'appointment_cancelled',tenantId,queueItemId},{headers:{authorization:''}}))).status,401);
+  access.tenant_ids=[];
+  assert.equal((await handler.fetch(request({event:'appointment_cancelled',tenantId,queueItemId}))).status,401);
+  assert.equal(sent.length,0);
+});
 for(const event of ['service_started','service_completed'])await test(`Push API: ${event} não envia aviso mesmo em versões antigas do app`, async()=>{
   item.status=event==='service_started'?'serving':'completed';
   assert.equal((await handler.fetch(request({event,tenantId,queueItemId}))).status,400);

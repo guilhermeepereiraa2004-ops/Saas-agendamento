@@ -5,6 +5,7 @@ import { tenantAppPath } from '../src/lib/pwa.js';
 type PushEventName =
   | 'client_joined'
   | 'client_called'
+  | 'appointment_cancelled'
   | 'client_on_way'
   | 'appointment_approved'
   | 'appointment_rejected';
@@ -35,6 +36,7 @@ type EventMessage = {
 const allowedEvents = new Set<PushEventName>([
   'client_joined',
   'client_called',
+  'appointment_cancelled',
   'client_on_way',
   'appointment_approved',
   'appointment_rejected',
@@ -135,6 +137,14 @@ function buildMessage(event: PushEventName, item: QueueRecord, tenant: TenantRec
     };
   }
   if (!clientTarget) return null;
+  if (event === 'appointment_cancelled' && item.status === 'cancelled') {
+    return {
+      title: item.appointment_time ? 'Agendamento cancelado' : 'Atendimento cancelado',
+      message: `Olá, ${item.name}. ${tenant.name} cancelou seu atendimento de ${item.service_name}. Entre em contato com o estabelecimento para mais informações.`,
+      target: clientTarget,
+      actionLabel: 'Ver estabelecimento',
+    };
+  }
   if (event === 'client_called' && item.status === 'ready') {
     return { title: 'Sua vez está chegando', message: `Olá, ${item.name}. Aproxime-se: seu atendimento começa em instantes.`, target: clientTarget, actionLabel: 'Acompanhar' };
   }

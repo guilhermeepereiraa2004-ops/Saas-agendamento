@@ -357,6 +357,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
   const logoutInFlight = useRef(false);
   const loginInFlight = useRef(false);
   const completionInFlight = useRef(false);
+  const cancellationInFlight = useRef(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showLogin, setShowLogin] = useState(audience === 'professional');
@@ -382,8 +383,9 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
   const [isServiceListOpen, setIsServiceListOpen] = useState(false);
   const [showJoinConfirmation, setShowJoinConfirmation] = useState(false);
   const [itemForCancel, setItemForCancel] = useState<QueueItem | null>(null);
-  const [showAdminDeleteModal, setShowAdminDeleteModal] = useState(false);
-  const [itemToDelete, setItemToDelete] = useState<QueueItem | null>(null);
+  const [showAdminCancelModal, setShowAdminCancelModal] = useState(false);
+  const [itemToCancel, setItemToCancel] = useState<QueueItem | null>(null);
+  const adminCancelDialogRef = useRef<HTMLDivElement>(null);
   const [showServiceModal, setShowServiceModal] = useState(false);
   const [showMobileJoinModal, setShowMobileJoinModal] = useState(false);
   const [editingService, setEditingService] = useState<Service | null>(null);
@@ -445,12 +447,13 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
   }, [showMobileJoinModal, showLogin, showJoinConfirmation, audience]);
 
   useEffect(() => {
-    if (!isAdminAddModalOpen && !showServiceModal && !showAdminDeleteModal) return;
+    if (!isAdminAddModalOpen && !showServiceModal && !showAdminCancelModal) return;
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      if (showAdminDeleteModal) {
-        setShowAdminDeleteModal(false);
-        setItemToDelete(null);
+      if (showAdminCancelModal) {
+        if (cancellationInFlight.current) return;
+        setShowAdminCancelModal(false);
+        setItemToCancel(null);
       } else if (showServiceModal) {
         setShowServiceModal(false);
       } else {
@@ -459,7 +462,24 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [isAdminAddModalOpen, showServiceModal, showAdminDeleteModal]);
+  }, [isAdminAddModalOpen, showServiceModal, showAdminCancelModal]);
+
+  useEffect(() => {
+    if (!showAdminCancelModal) return;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const dialog = adminCancelDialogRef.current;
+    const buttons = () => Array.from(dialog?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') || []);
+    const frame = requestAnimationFrame(() => buttons().at(-1)?.focus());
+    const trapFocus = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return;
+      const list = buttons();
+      if (!list.length) { event.preventDefault(); dialog?.focus(); return; }
+      if (event.shiftKey && document.activeElement === list[0]) { event.preventDefault(); list.at(-1)?.focus(); }
+      else if (!event.shiftKey && document.activeElement === list.at(-1)) { event.preventDefault(); list[0]?.focus(); }
+    };
+    window.addEventListener('keydown', trapFocus);
+    return () => { cancelAnimationFrame(frame); window.removeEventListener('keydown', trapFocus); if (previousFocus?.isConnected) previousFocus.focus(); };
+  }, [showAdminCancelModal]);
 
   useEffect(() => {
     let live = true;
@@ -1189,22 +1209,46 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
     }
   };
 
-  const handleRemoveFromQueue = async (item: QueueItem) => {
-    if (!isAuthenticated) return;
-    setItemToDelete(item);
-    setShowAdminDeleteModal(true);
+  const handleCancelAppointment = (item: QueueItem) => {
+    if (!isAuthenticated || activeQueueActionId || cancellationInFlight.current) return;
+    setItemToCancel(item);
+    setShowAdminCancelModal(true);
   };
 
-  const confirmAdminDelete = async () => {
-    if (!itemToDelete) return;
-    const { error } = await supabase.from('queue_items').delete().eq('id', itemToDelete.id);
-    if (error) {
-      showToast('Erro ao remover: ' + error.message, 'error');
-    } else {
-      showToast('Cliente removido com sucesso.', 'info');
+  const confirmAdminCancel = async () => {
+    if (!isAuthenticated || !itemToCancel || cancellationInFlight.current || activeQueueActionId) return;
+    const item = itemToCancel;
+    cancellationInFlight.current = true;
+    setActiveQueueActionId(item.id);
+    try {
+      // A conditional update also protects against another device completing the
+      // service first. Retain the row and push subscription for the cancellation notice.
+      const { data, error } = await supabase.from('queue_items')
+        .update({ status: 'cancelled', is_on_way: false })
+        .eq('tenant_id', tenant.id).eq('id', item.id)
+        .in('status', ['waiting', 'ready', 'pending', 'serving'])
+        .select('id');
+      if (error) { showToast('Não foi possível cancelar o atendimento. Tente novamente.', 'error'); return; }
+      if (!data?.length) {
+        setShowAdminCancelModal(false);
+        setItemToCancel(null);
+        showToast('Este atendimento já foi alterado em outro aparelho. Atualize a fila.', 'warning');
+        void fetchData();
+        return;
+      }
+      setQueue(current => current.map(entry => entry.id === item.id ? { ...entry, status: 'cancelled', isOnWay: false } : entry));
+      setShowAdminCancelModal(false);
+      setItemToCancel(null);
+      showToast('Atendimento cancelado.', 'success');
+      void sendPushNotification('appointment_cancelled', tenant.id, item.id).then(delivery => {
+        if (!delivery.sent) showToast('Atendimento cancelado, mas não foi possível enviar o aviso ao cliente. Confira se ele aceitou as notificações.', 'warning');
+      });
+    } catch {
+      showToast('Não foi possível cancelar o atendimento. Confira a conexão e tente novamente.', 'error');
+    } finally {
+      cancellationInFlight.current = false;
+      setActiveQueueActionId(null);
     }
-    setShowAdminDeleteModal(false);
-    setItemToDelete(null);
   };
 
   const handleConfirmOnWay = async (id: string) => {
@@ -2568,7 +2612,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
                               </>
                             )}
                           </div>
-                          <button onClick={() => handleRemoveFromQueue(item)} className="btn-action-remove" aria-label={`Remover ${item.name} do atendimento`}>✕</button>
+                          <button disabled={Boolean(activeQueueActionId)} onClick={() => handleCancelAppointment(item)} className="btn-action-remove admin-cancel-action" aria-label={`Cancelar atendimento de ${item.name}`}>Cancelar</button>
                         </div>
                       ))}
                     </div>
@@ -2791,7 +2835,10 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
                                     </>
                                   ) : (
                                     <button 
-                                      onClick={() => handleRemoveFromQueue(item)}
+                                      onClick={() => handleCancelAppointment(item)}
+                                      disabled={Boolean(activeQueueActionId)}
+                                      className="admin-cancel-action"
+                                      aria-label={`Cancelar atendimento de ${item.name}`}
                                       style={{ 
                                         width: '40px', 
                                         height: '40px', 
@@ -2803,10 +2850,9 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
                                         display: 'flex', 
                                         alignItems: 'center', 
                                         justifyContent: 'center',
-                                        opacity: 0.4
                                       }}
                                     >
-                                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                      <span>Cancelar</span>
                                     </button>
                                   )}
                                 </div>
@@ -3471,7 +3517,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <button 
                 onClick={() => handleCancelMyPlace(itemForCancel?.id || '')} 
-                className="btn-submit" 
+                className="btn-submit"
                 style={{ background: '#ef4444', color: '#fff', border: 'none' }}
               >
                 Sim, desejo remover
@@ -3488,27 +3534,29 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
         </div>
       )}
 
-      {/* Admin Delete Confirmation Modal */}
-      {showAdminDeleteModal && (
+      {/* Admin Cancellation Confirmation Modal */}
+      {showAdminCancelModal && (
         <div className="modal-overlay" style={{ zIndex: 10005 }}>
-          <div className="modal-content glass-panel admin-modal fade-in" role="alertdialog" aria-modal="true" aria-labelledby="admin-delete-title" style={{ maxWidth: '400px', textAlign: 'center', padding: '2.5rem' }}>
+          <div ref={adminCancelDialogRef} tabIndex={-1} className="modal-content glass-panel admin-modal fade-in" role="alertdialog" aria-modal="true" aria-labelledby="admin-cancel-title" aria-describedby="admin-cancel-description" style={{ maxWidth: '400px', textAlign: 'center', padding: '2.5rem' }}>
             <div style={{ width: '64px', height: '64px', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem', color: '#ef4444' }}>
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path><line x1="12" y1="2" x2="12" y2="12"></line></svg>
             </div>
-            <h3 id="admin-delete-title" style={{ fontSize: '1.5rem', marginBottom: '0.75rem', color: 'var(--text-primary)' }}>Remover cliente?</h3>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem', fontSize: '0.95rem', lineHeight: '1.5' }}>
-              Você está prestes a remover <strong>{itemToDelete?.name}</strong> da fila. Esta ação não pode ser desfeita.
+            <h3 id="admin-cancel-title" style={{ fontSize: '1.5rem', marginBottom: '0.75rem', color: 'var(--text-primary)' }}>Cancelar atendimento?</h3>
+            <p id="admin-cancel-description" style={{ color: 'var(--text-secondary)', marginBottom: '2rem', fontSize: '0.95rem', lineHeight: '1.5' }}>
+              O atendimento de <strong>{itemToCancel?.name}</strong> será cancelado e a posição ou o horário ficará livre. O cliente receberá um aviso se tiver notificações ativadas.
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <button 
-                onClick={confirmAdminDelete} 
-                className="btn-submit" 
+                onClick={confirmAdminCancel}
+                disabled={Boolean(activeQueueActionId)}
+                className="btn-submit admin-cancel-confirm"
                 style={{ background: '#ef4444', color: '#fff', border: 'none' }}
               >
-                Sim, remover da fila
+                {activeQueueActionId ? 'Cancelando…' : 'Sim, cancelar atendimento'}
               </button>
               <button 
-                onClick={() => { setShowAdminDeleteModal(false); setItemToDelete(null); }} 
+                disabled={Boolean(activeQueueActionId)}
+                onClick={() => { setShowAdminCancelModal(false); setItemToCancel(null); }}
                 className="btn-secondary" 
                 style={{ border: '1px solid rgba(0,0,0,0.1)', width: '100%' }}
               >
