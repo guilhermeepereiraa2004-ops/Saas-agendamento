@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import { tenantAppPath, type AppAudience } from '../src/lib/pwa.js';
 
 // Public metadata only: the same RPC already used by the customer page.
