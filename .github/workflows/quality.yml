@@ -31,7 +31,7 @@ jobs:
       - name: Safari engine and iOS flows
         env:
           AUDIT_BROWSER: webkit
-          AUDIT_FILTER: 'Recuperação|iPhone|iOS|PWA: profissional restaura|Financeiro detalhado: clientes.*390|Logo:'
+          AUDIT_FILTER: 'Recuperação|iPhone|iOS|PWA: profissional restaura|Financeiro detalhado: clientes.*390|Logo:|cliente confirma origem'
         run: npm run test:browser
       - uses: actions/upload-artifact@v4
         if: always()

@@ -136,6 +136,12 @@ async function fixture({ width = 1440, tenant = {}, tables = {}, auth = true, fo
         if (table==='get_public_tenant') return send(db.tenants.filter(t=>t.slug===body.p_slug).map(t=>{ const {login_password,login_email,admin_push_id,...safe}=t; void login_password;void login_email;void admin_push_id;return safe; }));
         if (table==='get_public_queue') return send(db.queue_items.filter(q=>q.tenant_id===body.p_tenant_id));
         if (table==='get_public_products') return send(db.tenant_products.filter(q=>q.tenant_id===body.p_tenant_id));
+        if (table==='customer_queue_action') {
+          const owned=db.queue_items.find(q=>q.id===body.p_queue_id);
+          if(!owned || body.p_token!=='a'.repeat(64)) return send({message:'Unauthorized booking'},403);
+          if(body.p_action==='subscribe') owned.push_id=body.p_push_id;
+          return send(owned);
+        }
         if (table==='complete_service') {
           const old=db.financial_records.find(r=>r.source_queue_item_id===body.p_queue_id);
           if(old) return send({record_id:old.id,already_completed:true});
@@ -1032,6 +1038,15 @@ try {
     await f.page.clock.runFor(6000);assert.match(await f.page.locator('.notification-permission-card').innerText(),/conexão com o serviço de avisos falhou/);
     await f.page.evaluate(()=>window.__pushHarness.setChoice('granted'));await f.page.getByRole('button',{name:'Tentar novamente'}).click();
     await f.page.locator('.notification-permission-card').waitFor({state:'detached'});
+  });
+  for(const width of [390,1440]) await test(`Avisos: cliente confirma origem atual automaticamente ao reabrir em ${width}px`, {auth:false,ownedItems:['mine'],tables:{queue_items:[row('mine')]},push:'enabled',width,origin:'https://www.suavez-app.com.br'}, async f => {
+    await f.page.waitForLoadState('networkidle');
+    await f.page.evaluate(tenantId=>localStorage.setItem(`suavez_tokens_${tenantId}`,JSON.stringify({mine:'a'.repeat(64)})),base.id);
+    await f.page.reload();
+    await wait(()=>f.requests.some(r=>r.table==='push-device'&&r.body.action==='customer-status'&&r.body.customerToken==='a'.repeat(64)));
+    const registration=f.requests.find(r=>r.table==='push-device'&&r.body.customerToken==='a'.repeat(64));
+    assert.equal(registration.body.queueItemId,'mine');assert.equal(registration.body.subscriptionToken,'qa-token');
+    assert.equal(await f.page.evaluate(()=>window.__pushHarness.requestCalls),0);
   });
   await test('Avisos: cliente recebe explicação e botão disponível após pedido travado', {auth:false,ownedItems:['mine'],tables:{queue_items:[row('mine')]},push:'prompt',permissionChoice:'hang',width:390}, async f => {
     await f.page.getByRole('button',{name:'Aceitar notificações'}).click();await f.page.clock.runFor(31000);

@@ -5,14 +5,15 @@ const compile=source=>ts.transpileModule(source,{compilerOptions:{target:ts.Scri
 const moduleURL=source=>`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`;
 const auth=moduleURL(compile(await readFile('api/_lib/auth.ts','utf8')));
 const pwa=moduleURL(compile(await readFile('src/lib/pwa.ts','utf8')));
-const source=compile(await readFile('api/push-device.ts','utf8')).replace("'./_lib/auth.js'",JSON.stringify(auth)).replace("'../src/lib/pwa.js'",JSON.stringify(pwa));
+const origin=moduleURL(compile(await readFile('api/_lib/push-origin.ts','utf8')));
+const source=compile(await readFile('api/push-device.ts','utf8')).replace("'./_lib/auth.js'",JSON.stringify(auth)).replace("'../src/lib/pwa.js'",JSON.stringify(pwa)).replace("'./_lib/push-origin.js'",JSON.stringify(origin));
 const {default:handler}=await import(moduleURL(source));
 Object.assign(process.env,{SUPABASE_URL:'https://db.qa.invalid',SUPABASE_ANON_KEY:'qa-public',SUPABASE_SECRET_KEY:'sb_secret_fixture',ONESIGNAL_APP_ID:'qa-app',ONESIGNAL_REST_API_KEY:'qa-private'});
 const tenantId='11111111-1111-4111-8111-111111111111';
 const deviceId='22222222-2222-4222-8222-222222222222';
 const providerId='33333333-3333-4333-8333-333333333333',userId='44444444-4444-4444-8444-444444444444',sessionId='55555555-5555-4555-8555-555555555555';
 const jwt=`fixture.${Buffer.from(JSON.stringify({sub:userId,session_id:sessionId})).toString('base64url')}.verified-by-auth-mock`;
-let subscriptions, access, providerStatus, sent, authStatus, calls, registrations;
+let subscriptions, access, providerStatus, sent, authStatus, calls, registrations, origins, customerProof, originFails;
 globalThis.fetch=async(url,options)=>{
   calls.push(url);
   if(url.endsWith('/auth/v1/user')) return Response.json({id:userId},{status:authStatus});
@@ -24,6 +25,8 @@ globalThis.fetch=async(url,options)=>{
     return Response.json({subscriptions},{status:providerStatus});
   }
   if(url.endsWith('/rpc/professional_push_device')) { registrations.push(JSON.parse(options.body));return Response.json(true); }
+  if(url.endsWith('/rpc/register_push_subscription_origin')) { origins.push(JSON.parse(options.body));return Response.json(true,{status:originFails?503:200}); }
+  if(url.endsWith('/rpc/verify_customer_queue_access')) return Response.json(customerProof);
   if(url.includes('/rest/v1/tenants?')) return Response.json([{slug:'qa'}]);
   if(url.startsWith('https://api.onesignal.com/notifications')) {sent.push(JSON.parse(options.body));return Response.json({id:'qa-message'});}
   throw new Error('Unexpected real network request');
@@ -36,6 +39,7 @@ let passed=0;
 async function test(name,fn){
   subscriptions=[{id:deviceId,enabled:true,notification_types:1,type:'ChromePush',token:'private-push-token'},{id:'other-device',enabled:true}];
   access={is_master:false,tenant_ids:[tenantId]};providerStatus=200;sent=[];calls=[];registrations=[];authStatus=200;
+  origins=[];customerProof=true;originFails=false;process.env.APP_ORIGIN='https://app.qa.invalid';
   await fn();passed++;console.log('PASS',name);
 }
 await test('Rejeita método, origem, JSON, IDs e ação inválidos',async()=>{
@@ -58,6 +62,33 @@ await test('Autoriza somente o aparelho comprovado e sessão real sem confiar no
   assert.match(registrations[0].p_token_hash,/^[a-f0-9]{64}$/);
   assert.equal(JSON.stringify(registrations).includes('private-push-token'),false);
   assert.equal(calls.some(url=>url.includes('/external_id/')),false);
+  assert.deepEqual(origins,[{p_subscription_id:deviceId,p_app_id:'qa-app',p_origin:'https://app.qa.invalid'}]);
+});
+await test('Domínio antigo não registra nem testa mesmo com sessão e token válidos',async()=>{
+  process.env.APP_ORIGIN='https://new.qa.invalid';
+  for(const action of ['status','test','customer-status']) {
+    const response=await handler.fetch(request({action}));assert.equal(response.status,409);
+    assert.equal((await response.json()).origin,'https://new.qa.invalid');
+  }
+  assert.equal(calls.length,0);assert.equal(origins.length,0);assert.equal(sent.length,0);
+  assert.equal((await handler.fetch(request({action:'unregister'}))).status,200);
+});
+await test('Cliente comprova a reserva e o token do próprio aparelho antes de vincular a origem',async()=>{
+  const response=await handler.fetch(request({action:'customer-status',queueItemId:providerId,customerToken:'a'.repeat(64)}));
+  assert.deepEqual(await response.json(),{registered:true});
+  assert.equal(registrations.length,0);assert.equal(origins.length,1);assert.equal(sent.length,0);
+  assert.equal(calls.some(url=>url.includes('/auth/')),false);
+});
+await test('Reserva alheia ou token push forjado não registra origem do cliente',async()=>{
+  const payload={action:'customer-status',queueItemId:providerId,customerToken:'a'.repeat(64)};
+  customerProof=false;assert.equal((await handler.fetch(request(payload))).status,401);
+  customerProof=true;
+  assert.equal((await (await handler.fetch(request({...payload,subscriptionToken:'forged'}))).json()).registered,false);
+  assert.equal(origins.length,0);assert.equal(sent.length,0);
+});
+await test('Falha ao gravar origem não anuncia vínculo confirmado e não envia teste',async()=>{
+  originFails=true;assert.equal((await handler.fetch(request({action:'test'}))).status,502);
+  assert.equal(sent.length,0);
 });
 await test('ID de aparelho conhecido ou alias forjado não bastam sem o token nativo',async()=>{
   for(const subscriptionToken of ['', 'token-forged']){

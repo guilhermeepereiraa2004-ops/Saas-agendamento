@@ -13,6 +13,7 @@ export async function professionalPushDevice(tenantId: string, subscriptionId: s
     keepalive: action === 'unregister',
   });
   if (response.status === 429) throw new Error('Aguarde 30 segundos antes de enviar outro teste.');
+  if (response.status === 409) throw new Error('Este acesso pertence ao endereço antigo. Abra o painel pelo domínio atual para ativar os avisos.');
   if (!response.ok) throw new Error('Não foi possível conferir o vínculo deste aparelho. Confira sua conexão e tente novamente.');
   return response.json() as Promise<{ registered: boolean; reason?: 'not-linked' | 'not-subscribed'; sent?: boolean }>;
 }

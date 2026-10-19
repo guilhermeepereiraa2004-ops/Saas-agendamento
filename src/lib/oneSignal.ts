@@ -355,6 +355,19 @@ export async function getOneSignalDeviceProof() {
   return { id, token: subscription.token };
 }
 
+export async function registerCustomerPushOrigin(tenantId: string, queueItemId: string, customerToken: string, subscriptionId: string) {
+  try {
+    const proof = await getOneSignalDeviceProof();
+    if (proof?.id !== subscriptionId) return false;
+    const response = await fetch('/api/push-device', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'customer-status', tenantId, queueItemId, customerToken, subscriptionId, subscriptionToken: proof.token }),
+      signal: AbortSignal.timeout(28000),
+    });
+    return response.ok && (await response.json()).registered === true;
+  } catch { return false; }
+}
+
 export function logoutOneSignal(): Promise<void> {
   return changeIdentity(null).then(() => {});
 }

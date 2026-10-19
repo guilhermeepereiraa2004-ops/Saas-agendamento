@@ -2,6 +2,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { verifyStaff, serverRpc } from './_lib/auth.js';
 import { tenantAppPath } from '../src/lib/pwa.js';
+import { pushOrigin } from './_lib/push-origin.js';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const testLimits = new Map<string, number>();
@@ -12,7 +13,7 @@ export default { async fetch(request: Request) {
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
   const origin = new URL(request.url).origin;
   if (request.headers.get('origin') !== origin) return json({ error: 'Origin not allowed' }, 403);
-  let body: { tenantId?: string; subscriptionId?: string; subscriptionToken?: string; action?: string };
+  let body: { tenantId?: string; subscriptionId?: string; subscriptionToken?: string; action?: string; queueItemId?: string; customerToken?: string };
   try {
     const text = await request.text();
     if (text.length > 12000) return json({ error: 'Payload too large' }, 413);
@@ -20,11 +21,17 @@ export default { async fetch(request: Request) {
     if (!body || typeof body !== 'object' || Array.isArray(body)) return json({ error: 'Invalid request' }, 400);
   } catch { return json({ error: 'Invalid request' }, 400); }
   const { tenantId = '', subscriptionId = '', subscriptionToken = '', action } = body;
-  if (typeof tenantId !== 'string' || typeof subscriptionId !== 'string' || typeof action !== 'string' || !uuid.test(tenantId) || !uuid.test(subscriptionId) || !['status','test','unregister'].includes(action)) return json({ error: 'Invalid device' }, 400);
-  const staff = await verifyStaff(request, tenantId);
-  if (!staff?.sessionId) return json({ error: 'Unauthorized' }, 401);
-  const parameters = { p_tenant_id: tenantId, p_subscription_id: subscriptionId, p_user_id: staff.userId, p_session_id: staff.sessionId };
+  if (typeof tenantId !== 'string' || typeof subscriptionId !== 'string' || typeof action !== 'string' || !uuid.test(tenantId) || !uuid.test(subscriptionId) || !['status','test','unregister','customer-status'].includes(action)) return json({ error: 'Invalid device' }, 400);
+  const canonicalOrigin = pushOrigin(request);
+  if (action !== 'unregister' && origin !== canonicalOrigin) return json({ error: 'Open the current site to enable notifications', reason: 'obsolete-origin', origin: canonicalOrigin }, 409);
+  const staff = action === 'customer-status' ? null : await verifyStaff(request, tenantId);
+  if (action !== 'customer-status' && !staff?.sessionId) return json({ error: 'Unauthorized' }, 401);
+  const parameters = { p_tenant_id: tenantId, p_subscription_id: subscriptionId, p_user_id: staff?.userId, p_session_id: staff?.sessionId };
   try {
+    if (action === 'customer-status') {
+      if (typeof body.queueItemId !== 'string' || !uuid.test(body.queueItemId) || typeof body.customerToken !== 'string' || body.customerToken.length < 32 || body.customerToken.length > 128) return json({ error: 'Unauthorized' }, 401);
+      if (!await serverRpc<boolean>('verify_customer_queue_access', { p_queue_id: body.queueItemId, p_tenant_id: tenantId, p_token: body.customerToken })) return json({ error: 'Unauthorized' }, 401);
+    }
     if (action === 'unregister') {
       await serverRpc('professional_push_device', { ...parameters, p_action: 'unregister' });
       return json({ registered: false });
@@ -51,9 +58,13 @@ export default { async fetch(request: Request) {
     const supplied = createHash('sha256').update(subscriptionToken).digest();
     if (!timingSafeEqual(actual, supplied)) return json({ registered: false, reason: 'invalid-proof' });
     if (!subscription.enabled || subscription.notification_types !== 1 || !['ChromePush','FirefoxPush','SafariPush'].includes(subscription.type || '')) return json({ registered: false, reason: 'not-subscribed' });
-    const registered = await serverRpc<boolean>('professional_push_device', { ...parameters, p_action: 'register', p_token_hash: supplied.toString('hex') });
-    if (!registered) return json({ registered: false, reason: 'not-linked' });
-    if (action === 'status') return json({ registered: true });
+    if (action !== 'customer-status') {
+      const registered = await serverRpc<boolean>('professional_push_device', { ...parameters, p_action: 'register', p_token_hash: supplied.toString('hex') });
+      if (!registered) return json({ registered: false, reason: 'not-linked' });
+    }
+    const originRegistered = await serverRpc<boolean>('register_push_subscription_origin', { p_subscription_id: subscriptionId, p_app_id: appId, p_origin: canonicalOrigin });
+    if (!originRegistered) return json({ registered: false, reason: 'obsolete-origin' });
+    if (action === 'status' || action === 'customer-status') return json({ registered: true });
     const limitKey = `${tenantId}:${subscriptionId}`;
     const now = Date.now();
     if ((testLimits.get(limitKey) || 0) > now) return json({ error: 'Wait before another test' }, 429);

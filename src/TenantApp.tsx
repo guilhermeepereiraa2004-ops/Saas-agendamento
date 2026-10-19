@@ -4,7 +4,7 @@ import type { QueueItem, Tenant, TenantTask, TenantProduct, Service } from './ty
 import { supabase } from './lib/supabase';
 import FinancialView from './FinancialView';
 import { useToasts } from './lib/toast';
-import { requestNotificationPermission, getOneSignalId, sendPushNotification, getNotificationStatus, logoutOneSignal } from './lib/oneSignal';
+import { requestNotificationPermission, getOneSignalId, sendPushNotification, getNotificationStatus, logoutOneSignal, registerCustomerPushOrigin } from './lib/oneSignal';
 import type { NotificationStatus } from './lib/notificationStatus';
 import { NotificationPermissionCard } from './components/NotificationPermissionCard';
 import { useAdminDrawer } from './lib/useAdminDrawer';
@@ -860,7 +860,8 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
       console.error('Não foi possível vincular as notificações aos atendimentos do cliente.', error);
       return false;
     }
-
+    const verified = await Promise.all(myQueueItemIds.map(id => registerCustomerPushOrigin(tenant.id, id, tokens[id] || '', pushId)));
+    if (!verified.every(Boolean)) return false;
     setQueue(current => current.map(item =>
       myQueueItemIds.includes(item.id) ? { ...item, pushId } : item
     ));
@@ -1071,6 +1072,7 @@ export default function TenantApp({ tenant: initialTenant, audience }: { tenant:
         setMyQueueItemIds(newIds);
         localStorage.setItem(`suavez_customer_ids_${tenant.id}`, JSON.stringify(newIds));
         localStorage.setItem(`suavez_in_queue_${tenant.id}`, 'true');
+        if (pushId) void registerCustomerPushOrigin(tenant.id, data[0].id, customerToken, pushId);
         setForceShowJoinForm(false);
         setShowMobileJoinModal(false);
         

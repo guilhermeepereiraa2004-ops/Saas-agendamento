@@ -1,6 +1,7 @@
 /// <reference types="node" />
 import { verifyStaff, serverConfig, serverRpc } from './_lib/auth.js';
 import { tenantAppPath } from '../src/lib/pwa.js';
+import { normalizeOrigin, pushOrigin } from './_lib/push-origin.js';
 
 type PushEventName =
   | 'client_joined'
@@ -43,17 +44,6 @@ const allowedEvents = new Set<PushEventName>([
 ]);
 
 const rateBuckets = new Map<string, { count: number; resetAt: number }>();
-
-function normalizeOrigin(value: string | undefined): string | null {
-  const raw = value?.trim().replace(/\/$/, '');
-  if (!raw) return null;
-
-  try {
-    return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).origin;
-  } catch {
-    return null;
-  }
-}
 
 function json(data: unknown, status = 200) {
   return Response.json(data, {
@@ -211,16 +201,21 @@ export default {
 
       // APP_ORIGIN was historically configured without the protocol in this project.
       // OneSignal rejects web_url unless it starts with http:// or https://.
-      const appOrigin = normalizeOrigin(process.env.APP_ORIGIN) || new URL(request.url).origin;
+      const appOrigin = pushOrigin(request);
       const destinationUrl = `${appOrigin}${tenantAppPath(tenant.slug, 'professional' in eventMessage.target ? 'professional' : 'customer')}`;
       const targetIdentity = 'subscriptionId' in eventMessage.target
         ? eventMessage.target.subscriptionId
         : 'authorized-professional-devices';
       const idempotencyKey = await stableUuid(`${event}:${tenantId}:${queueItemId}:${targetIdentity}`);
-      const subscriptionIds = 'subscriptionId' in eventMessage.target
+      const candidateIds = 'subscriptionId' in eventMessage.target
         ? [eventMessage.target.subscriptionId]
         : await serverRpc<string[]>('professional_push_targets', { p_tenant_id: tenantId });
-      if (!subscriptionIds.length) return json({ sent: false, reason: 'no_authorized_devices' }, 202);
+      if (!candidateIds.length) return json({ sent: false, reason: 'no_authorized_devices' }, 202);
+      // Fail closed: never fall back to aliases or legacy/unknown origins.
+      const subscriptionIds = await serverRpc<string[]>('push_targets_for_origin', {
+        p_subscription_ids: candidateIds, p_app_id: appId, p_origin: appOrigin,
+      });
+      if (!subscriptionIds.length) return json({ sent: false, reason: 'no_devices_for_current_origin' }, 202);
       const target = { include_subscription_ids: subscriptionIds };
 
       const oneSignalResponse = await fetch('https://api.onesignal.com/notifications?c=push', {

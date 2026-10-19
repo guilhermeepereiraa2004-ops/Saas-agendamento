@@ -5,7 +5,8 @@ const source = await readFile(new URL('../api/send-push.ts', import.meta.url), '
 const authSource = await readFile(new URL('../api/_lib/auth.ts', import.meta.url), 'utf8');
 const authModule = ts.transpileModule(authSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
 const pwaModule = ts.transpileModule(await readFile(new URL('../src/lib/pwa.ts',import.meta.url),'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
-const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText.replace("'./_lib/auth.js'",JSON.stringify(`data:text/javascript;base64,${Buffer.from(authModule).toString('base64')}`)).replace("'../src/lib/pwa.js'",JSON.stringify(`data:text/javascript;base64,${Buffer.from(pwaModule).toString('base64')}`));
+const originModule = ts.transpileModule(await readFile(new URL('../api/_lib/push-origin.ts',import.meta.url),'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
+const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText.replace("'./_lib/auth.js'",JSON.stringify(`data:text/javascript;base64,${Buffer.from(authModule).toString('base64')}`)).replace("'../src/lib/pwa.js'",JSON.stringify(`data:text/javascript;base64,${Buffer.from(pwaModule).toString('base64')}`)).replace("'./_lib/push-origin.js'",JSON.stringify(`data:text/javascript;base64,${Buffer.from(originModule).toString('base64')}`));
 const { default: handler } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
 Object.assign(process.env, { APP_ORIGIN: 'https://qa.example.invalid', SUPABASE_URL: 'https://db.example.invalid', SUPABASE_ANON_KEY: 'qa-public-key', SUPABASE_SERVICE_ROLE_KEY:'qa-server-key', ONESIGNAL_APP_ID: 'qa-app', ONESIGNAL_REST_API_KEY: 'qa-private-key' });
 const tenantId = '11111111-1111-4111-8111-111111111111';
@@ -14,11 +15,16 @@ const baseline = { id: queueItemId, name: 'Cliente QA', service_name: 'Corte', s
 let item = { ...baseline }; let providerStatus = 200; let providerBody = { id: 'qa-message' }; let lookupRows = true; let sent = [];
 let access = {is_master:false,tenant_ids:[tenantId]}; let validProof=true; let authStatus=200; let proofThrows=false;
 let databaseHeaders=[];let authorizedTargets=['authorized-device-one','authorized-device-two'];let targetsFail=false;
+let legacyIds=[],originCalls=[],originFilterFails=false;
 globalThis.fetch = async (url, options) => {
   if(url.startsWith('https://db.example.invalid/')) databaseHeaders.push(options.headers);
   if (url.endsWith('/auth/v1/user')) return Response.json({id:'qa-user'},{status:authStatus});
   if (url.endsWith('/rpc/staff_access')) return Response.json(access);
   if (url.endsWith('/rpc/professional_push_targets')) return Response.json(authorizedTargets,{status:targetsFail?503:200});
+  if (url.endsWith('/rpc/push_targets_for_origin')) {
+    const input=JSON.parse(options.body);originCalls.push(input);
+    return Response.json(input.p_subscription_ids.filter(id=>!legacyIds.includes(id)),{status:originFilterFails?503:200});
+  }
   if (url.endsWith('/rpc/verify_customer_queue_access')) { if(proofThrows) throw new Error('QA timeout');return Response.json(validProof); }
   if (url.startsWith('https://db.example.invalid/rest/v1/queue_items')) return Response.json(lookupRows ? [item] : []);
   if (url.startsWith('https://db.example.invalid/rest/v1/tenants')) return Response.json([{ id: tenantId, name: 'QA', slug: 'qa' }]);
@@ -32,6 +38,7 @@ async function test(name, callback) {
   item = { ...baseline }; sent = []; providerStatus = 200; providerBody = { id: 'qa-message' }; lookupRows = true;
   access={is_master:false,tenant_ids:[tenantId]};validProof=true;authStatus=200;proofThrows=false;
   authorizedTargets=['authorized-device-one','authorized-device-two'];targetsFail=false;
+  legacyIds=[];originCalls=[];originFilterFails=false;
   try { await callback(); results.push({ name, status: 'passed' }); }
   catch (error) { results.push({ name, status: 'failed', error: error.message }); }
 }
@@ -55,6 +62,23 @@ for (const [event, status, appointment, target] of [
   assert.equal(sent[0].web_url,destination);assert.equal(sent[0].web_buttons[0].url,destination);assert.ok(sent[0].idempotency_key);
 });
 await test('Push API: chave de idempotência estável para mesma ação', async () => { await handler.fetch(request()); await handler.fetch(request()); assert.equal(sent[0].idempotency_key, sent[1].idempotency_key); });
+await test('Migração: mesmo profissional com inscrição antiga e nova recebe somente na nova',async()=>{
+  item.status='waiting';authorizedTargets=['old-vercel-device','new-domain-device','second-new-domain-device'];legacyIds=['old-vercel-device'];
+  assert.equal((await handler.fetch(request({event:'client_joined',tenantId,queueItemId,customerToken:'a'.repeat(64)}))).status,200);
+  assert.deepEqual(sent[0].include_subscription_ids,['new-domain-device','second-new-domain-device']);
+  assert.equal(originCalls[0].p_origin,'https://qa.example.invalid');assert.equal(originCalls[0].p_app_id,'qa-app');
+});
+await test('Migração: somente aparelhos antigos ou sem origem confirmada não recebem',async()=>{
+  item.status='waiting';legacyIds=[...authorizedTargets];
+  const response=await handler.fetch(request({event:'client_joined',tenantId,queueItemId,customerToken:'a'.repeat(64)}));
+  assert.equal(response.status,202);assert.equal((await response.json()).reason,'no_devices_for_current_origin');assert.equal(sent.length,0);
+});
+await test('Migração: cliente ainda inscrito na origem antiga não recebe chamado',async()=>{
+  legacyIds=['qa-subscription'];assert.equal((await handler.fetch(request())).status,202);assert.equal(sent.length,0);
+});
+await test('Migração: falha do filtro nunca recorre aos destinatários antigos',async()=>{
+  originFilterFails=true;assert.equal((await handler.fetch(request())).status,500);assert.equal(sent.length,0);
+});
 await test('Segurança: nenhum aparelho autorizado impede envio mesmo se houver alias OneSignal forjado',async()=>{
   item.status='waiting';authorizedTargets=[];
   assert.equal((await handler.fetch(request({event:'client_joined',tenantId,queueItemId,customerToken:'a'.repeat(64)}))).status,202);assert.equal(sent.length,0);

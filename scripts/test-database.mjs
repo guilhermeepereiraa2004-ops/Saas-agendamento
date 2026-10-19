@@ -147,6 +147,24 @@ try {
     assert.equal((await db.query('select count(*)::int n from app_private.professional_push_devices where subscription_id=$1',[b])).rows[0].n,0);
     await db.query('delete from auth.sessions where id=$1',[session]);
   });
+  await test('Push origin filtering excludes legacy, unknown and other-app subscriptions without deleting them',async()=>{
+    const a=crypto.randomUUID(),b=crypto.randomUUID(),unknown=crypto.randomUUID();
+    const register=(id,app,origin)=>as('service_role',null,'select register_push_subscription_origin($1,$2,$3) ok',[id,app,origin]);
+    const targets=async(app,origin,ids=[a,b,b,unknown])=>(await as('service_role',null,'select push_targets_for_origin($1,$2,$3) ids',[ids,app,origin])).rows[0].ids;
+    await register(a,'app-one','https://old.vercel.app');await register(b,'app-one','https://www.current.invalid');
+    assert.deepEqual(await targets('app-one','https://www.current.invalid'),[b]);
+    assert.deepEqual(await targets('app-two','https://www.current.invalid'),[]);
+    assert.deepEqual(await targets('app-one','https://current.invalid'),[]);
+    assert.deepEqual(await targets('app-one','https://www.current.invalid',[]),[]);
+    assert.equal((await register(a,'app-one','https://www.current.invalid')).rows[0].ok,null);
+    assert.deepEqual(await targets('app-one','https://www.current.invalid'),[b]);
+    assert.equal((await db.query('select count(*)::int n from app_private.push_subscription_origins')).rows[0].n,2);
+    for(const role of ['anon','authenticated']){
+      await denied(role,owner,'select * from app_private.push_subscription_origins');
+      await denied(role,owner,'select register_push_subscription_origin($1,$2,$3)',[unknown,'app-one','https://www.current.invalid']);
+      await denied(role,owner,'select push_targets_for_origin($1,$2,$3)',[[a,b],'app-one','https://www.current.invalid']);
+    }
+  });
   await test('Completion is idempotent and records exactly one receipt', async () => {
     await as('authenticated',owner,"update queue_items set status='serving',started_at='2026-10-18T10:00:00-03:00' where id=$1",[queueId]);
     const first=(await as('authenticated',owner,'select complete_service($1,$2) result',[tenant,queueId])).rows[0].result;

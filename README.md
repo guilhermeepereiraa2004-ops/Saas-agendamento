@@ -17,7 +17,8 @@ Sistema de gerenciamento de filas e agendamentos multirrecursos (barbearias, lav
    - `SUPABASE_SECRET_KEY`: chave secreta atual do Supabase (`sb_secret_...`), somente no servidor. Necessária para provisionar contas e verificar o destinatário das notificações. Configure como Secret em Production. **Nunca use o prefixo `VITE_` nesta chave.** O servidor também aceita `SUPABASE_SERVICE_ROLE_KEY` por compatibilidade; `SUPABASE_SECRET_KEY` tem prioridade.
    - `VITE_ONESIGNAL_APP_ID`: ID público do aplicativo no OneSignal.
    - `ONESIGNAL_REST_API_KEY`: chave REST privada do OneSignal. Usada apenas no servidor para enviar avisos e conferir a posse dos aparelhos. **Nunca deve receber o prefixo `VITE_`**.
-   - `APP_ORIGIN`: domínio canônico da aplicação, por exemplo `https://suavez.app`.
+   - `APP_ORIGIN`: domínio canônico da aplicação, em produção `https://www.suavez-app.com.br`.
+     Os envios só incluem inscrições verificadas nesse domínio e no App ID atual. Ao trocar de domínio, configure também o Site URL no OneSignal e republique. As inscrições antigas são ignoradas; o painel e a página do cliente vinculam os aparelhos automaticamente ao serem reabertos no endereço atual (após conceder a permissão do novo domínio).
 
    Se uma chave REST já foi publicada anteriormente como `VITE_ONESIGNAL_REST_API_KEY`, gere uma nova chave no OneSignal, configure `ONESIGNAL_REST_API_KEY` na Vercel e revogue a antiga.
 
